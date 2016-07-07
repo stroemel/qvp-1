@@ -10,9 +10,7 @@ median averaging for zh, zdr,rho, phi over 360 degrees
 # Todo: add wet bulb temperature
 # from cosmo data
 
-import warnings
-
-import sys
+import datetime as dt
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -20,13 +18,18 @@ import matplotlib.dates as mdates
 from matplotlib.colors import BoundaryNorm
 from matplotlib.colors import ListedColormap
 import h5py
-import datetime as dt
+
+import eccodes as codes
+import miub_eccodes as mecc
+
+
 from scipy import stats
 import glob
 import os
 import wradlib as wrl
 
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+import psutil
+process = psutil.Process(os.getpid())
 
 """
 -----------------------------------------------------------------
@@ -34,21 +37,36 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 -----------------------------------------------------------------
 """
 date = '2015-06-22'
-location = 'Bonn'
+
 h1, m1 = (15, 00)
 h2, m2 = (18, 30)
 
-# path='/home/k.muehlbauer/ownCloud/data'
-# path2='/home/k.muehlbauer/ownCloud/prog/snippets/silke/temp'
-# path='/automount/radar-archiv/scans/2014/2014-06/2014-06-09'
-path = '/mnt/scans/2015/2015-06/2015-06-22'
-path2 = '/home/silke/Python/output/Riming'
-# Achtung Elevation Angle muß unten auch gesetzt werden
-# aendern
-file_path = path + '/' + 'n_ppi_280deg/'
-# file_path= path  + '/' + '/ppi_8p1deg/'
-textfile_path = path2 + '/' + date + '/textfiles/'
-plot_path = path2 + '/' + date + '/plots/'
+
+# this defines start and end time
+# need to be within the same day
+start_time = dt.datetime(2015, 6, 22, 15, 00)
+end_time = dt.datetime(2015, 6, 22, 18, 30)
+
+location = 'Bonn'
+radar_path='/automount/radar/scans/{0}/{0}-{1:02}/{0}-{1:02}-{2:02}'.format(start_time.year, start_time.month, start_time.day)
+output_path = '../output/Riming'
+file_path = radar_path + '/' + 'n_ppi_280deg/'
+textfile_path = output_path + '/{0}-{1:02}-{2:02}/textfiles/'.format(start_time.year, start_time.month, start_time.day)
+
+plot_path = output_path + '/{0}-{1:02}-{2:02}/plots/'.format(start_time.year, start_time.month, start_time.day)
+
+print(radar_path)
+print(output_path)
+print(textfile_path)
+print(plot_path)
+#exit(9)
+# create paths accordingly
+if not os.path.isdir(output_path):
+    os.makedirs(output_path)
+if not os.path.isdir(textfile_path):
+    os.makedirs(textfile_path)
+if not os.path.isdir(plot_path):
+    os.makedirs(plot_path)
 
 plot_width = 9
 plot_height = 7.2
@@ -62,39 +80,51 @@ special_char = ":"
 functions
 """
 
+# transforms rotated_ll to latlon and vica versa
+def rotated_grid_transform(grid_in, option, SP_coor):
 
-# -----------------------------------------------------------------
-def file_name_list():
-    """
-    generates a list of filenames for the regarded time interval
-    from h1:m1 to h2:m2
-    """
-    file_names = []
-    hour = h1
-    minute = m1
-    while hour * 60 + minute <= h2 * 60 + m2:
-        file_name = generate_file_name(hour, minute)
-        file_names.append(file_name)
-        hour, minute = next_time(hour, minute)
-    return file_names
+    lon = grid_in[...,0]
+    lat = grid_in[...,1]
 
+    lon = np.deg2rad(lon) # Convert degrees to radians
+    lat = np.deg2rad(lat)
 
-# ----------------------------------------------------------------
-def generate_file_name(hour, minute):
-    """
-    Generates a data filename out of date and time 
-    """
-    hour = str(hour)
-    if len(hour) == 1:
-        hour = "0" + hour
-    minute = str(minute)
-    if len(minute) == 1:
-        minute = "0" + minute
-    file_name = date + "--" + hour + special_char + minute + special_char + "00,00.mvol"
+    SP_lon = SP_coor[0]
+    SP_lat = SP_coor[1]
 
-    # print "filename: ",file_name
-    return file_name
+    theta = 90 + SP_lat # Rotation around y-axis
+    phi = SP_lon # Rotation around z-axis
 
+    phi = np.deg2rad(phi) # Convert degrees to radians
+    theta = np.deg2rad(theta)
+
+    x = np.cos(lon) * np.cos(lat) # Convert from spherical to cartesian coordinates
+    y = np.sin(lon) * np.cos(lat)
+    z = np.sin(lat)
+
+    if not option: # Regular -> Rotated
+
+        x_new = np.cos(theta) * np.cos(phi) * x + np.cos(theta) * np.sin(phi) * y + np.sin(theta) * z
+        y_new = -np.sin(phi) * x + np.cos(phi) * y
+        z_new = -np.sin(theta) * np.cos(phi) * x - np.sin(theta) * np.sin(phi) * y + np.cos(theta) * z
+
+    else:
+
+        phi = -phi
+        theta = -theta
+
+        x_new = np.cos(theta) * np.cos(phi) * x + np.sin(phi) * y + np.sin(theta) * np.cos(phi) * z
+        y_new = -np.cos(theta) * np.sin(phi) * x + np.cos(phi) * y - np.sin(theta) * np.sin(phi) * z
+        z_new = -np.sin(theta) * x + np.cos(theta) * z
+
+    lon_new = np.arctan2(y_new, x_new) # Convert cartesian back to spherical coordinates
+    lat_new = np.arcsin(z_new)
+
+    # +90 added for proper presentation in europe
+    lon_new = np.rad2deg(lon_new) + 90  # Convert radians back to degrees
+    lat_new = np.rad2deg(lat_new)
+
+    return np.dstack((lon_new, lat_new))
 
 # -----------------------------------------------------------------
 
@@ -388,7 +418,196 @@ def head_lines(k):
     return first_lines
 
 
-# -----------------------------------------------------------------
+
+class boxpol(object):
+    """
+    reads data from hdf5-file
+    gelesen werden die Daten zh,phi,rho,zdr mit Zeitstempel.
+    Mit der Rückgabe von no_file=0 wird zum Ausdruck gebracht, dass
+    die Datei korrekt gelesen werden konnte.
+
+    Im Fehlerfall (Rückgabe n0_file=1) werden Dummy-Daten returniert und
+    auf den Bildschirm der Name der nicht gefundenen Datei ausgegeben.
+    """
+    def __init__(self, filename, **kwargs):
+        data = read_generic_hdf5(filename)
+        if data is not None:
+            self._zh = transform(data['scan0/moment_10']['data'],
+                           data['scan0/moment_10']['attrs']['dyn_range_min'],
+                           data['scan0/moment_10']['attrs']['dyn_range_max'],
+                           data['scan0/moment_10']['attrs']['format'])
+
+            self._phi = transform(data['scan0/moment_1']['data'],
+                            data['scan0/moment_1']['attrs']['dyn_range_min'],
+                            data['scan0/moment_1']['attrs']['dyn_range_max'],
+                            data['scan0/moment_1']['attrs']['format'])
+
+            self._rho = transform(data['scan0/moment_2']['data'],
+                            data['scan0/moment_2']['attrs']['dyn_range_min'],
+                            data['scan0/moment_2']['attrs']['dyn_range_max'],
+                            data['scan0/moment_2']['attrs']['format'])
+
+            self._zdr = transform(data['scan0/moment_9']['data'],
+                            data['scan0/moment_9']['attrs']['dyn_range_min'],
+                            data['scan0/moment_9']['attrs']['dyn_range_max'],
+                            data['scan0/moment_9']['attrs']['format'])
+
+            self._vel = transform(data['scan0/moment_5']['data'],
+                    data['scan0/moment_5']['attrs']['dyn_range_min'],
+                    data['scan0/moment_5']['attrs']['dyn_range_max'],
+                    data['scan0/moment_5']['attrs']['format'])
+
+            self._radar_height = data['where']['attrs']['height']
+
+            try:
+                self._date = dt.datetime.strptime(data['scan0/how']['attrs']['timestamp'].decode(), '%Y-%m-%dT%H:%M:%SZ')
+            except:
+                self._date = dt.datetime.strptime(data['scan0/how']['attrs']['timestamp'].decode(), '%Y-%m-%dT%H:%M:%S.000Z')
+
+    @property
+    def zh(self):
+        """ Returns DataSource
+        """
+        return self._zh
+
+    @zh.setter
+    def zh(self, value):
+        self._zh = value
+
+    @property
+    def phi(self):
+        """ Returns DataSource
+        """
+        return self._phi
+
+    @phi.setter
+    def phi(self, value):
+        self._phi = value
+
+    @property
+    def rho(self):
+        """ Returns DataSource
+        """
+        return self._rho
+
+    @rho.setter
+    def rho(self, value):
+        self._rho = value
+
+    @property
+    def zdr(self):
+        """ Returns DataSource
+        """
+        return self._zdr
+
+    @zdr.setter
+    def zdr(self, value):
+        self._zdr = value
+
+    @property
+    def date(self):
+        """ Returns DataSource
+        """
+        return self._date
+
+    @property
+    def radar_height(self):
+        """ Returns DataSource
+        """
+        return self._radar_height
+
+
+def fig_ax(title, w, h):
+    fig = plt.figure(figsize=(w, h))
+    ax = fig.add_subplot(111)
+    ax.set_title(title)
+    return fig, ax
+
+def add_contour(ax, X, Y, data, levels, **kwargs):
+    cs = ax.contour(X, Y, data, levels, **kwargs)
+    ax.clabel(cs, fmt='%2.0f', inline=True, fontsize=10)
+
+def add_plot(mom, cfg):
+    ax = mom['ax']
+    levels = mom['levels']
+    if cfg['contour']:
+        im = ax.contourf(mom['data'], levels=levels,
+                         colors=cfg['colors'], origin='lower', axis='equal',
+                         extent=[cfg['dt_start'], cfg['dt_stop'],
+                                 -0.11, cfg['beam_height'][-1]])
+    else:
+        cmap = ListedColormap(cfg['colors'])  # , name='')
+        norm = BoundaryNorm(levels, ncolors=cmap.N, clip=True)
+        im = ax.pcolormesh(cfg['X'], cfg['Y'], mom['data'], cmap=cmap, norm=norm)
+
+    ax.set_ylim(0, 13)
+    ax.xaxis_date()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('\n%H:%M'))
+    ax.xaxis.set_major_locator(mdates.HourLocator())
+    ax.xaxis.set_minor_formatter(mdates.DateFormatter('%M'))
+    ax.xaxis.set_minor_locator(
+        mdates.MinuteLocator(byminute=(15, 30, 45, 60)))
+    ax.grid()
+    ax.set_ylabel('Height (km)')
+    ax.set_xlabel('Time (UTC)')
+
+    cb = mom['fig'].colorbar(im, orientation='vertical', pad=0.018, aspect=35)
+    cb.outline.set_visible(False)
+    cbarytks = plt.getp(cb.ax.axes, 'yticklines')
+    plt.setp(cbarytks, visible=False)
+    cb.set_ticks(levels[0:-1])
+    cb.set_ticklabels(["%.2f" % lev for lev in levels[0:-1]])
+    cb.set_label(mom['cb_label'])
+
+
+def get_grid_from_gribfile(filename, rotated=False):
+
+    f = open(filename)
+    # get grib message count and create gid_list, close filehandle
+    msg_count = codes.codes_count_in_file(f)
+    gid_list = [codes.codes_grib_new_from_file(f) for i in range(msg_count)]
+    f.close()
+
+    print("Working on grib-file: {0}".format(filename))
+    print("Message Count: {0}".format(msg_count))
+
+    # read grib grid details from given gid
+    gid = gid_list[0]
+
+    return get_grid_from_gid(gid, rotated=rotated)
+
+
+def get_grid_from_gid(gid, rotated=False):
+
+    Ni = codes.codes_get(gid, 'Ni')
+    Nj = codes.codes_get(gid, 'Nj')
+    lat_start = codes.codes_get(gid, 'latitudeOfFirstGridPointInDegrees')
+    lon_start = codes.codes_get(gid, 'longitudeOfFirstGridPointInDegrees')
+    lat_stop = codes.codes_get(gid, 'latitudeOfLastGridPointInDegrees')
+    lon_stop = codes.codes_get(gid, 'longitudeOfLastGridPointInDegrees')
+
+    print("LL: ({0},{1})".format(lon_start, lat_start))
+    print("UR: ({0},{1})".format(lon_stop, lat_stop))
+
+    lat_sp = codes.codes_get(gid, 'latitudeOfSouthernPole')
+    lon_sp = codes.codes_get(gid, 'longitudeOfSouthernPole')
+    ang_rot = codes.codes_get(gid, 'angleOfRotation')
+
+    print("SP: ({0},{1}) - Ang:{2}".format(lon_sp, lat_sp, ang_rot))
+
+    # create grid arrays from grid details
+    # iarr, jarr one-dimensional data
+    iarr = np.linspace(lon_start, lon_stop, num=Ni, endpoint=False)
+    jarr = np.linspace(lat_start, lat_stop, num=Nj, endpoint=False)
+    # converted by meshgrid to 2d-arrays
+    i2d, j2d = np.meshgrid(iarr, jarr)
+
+    grid_rot = np.dstack((i2d, j2d))
+
+    if not rotated:
+        return rotated_grid_transform(grid_rot, 1, [lon_sp, lat_sp])
+    else:
+        return grid_rot
 
 # -----------------------------------------------------------------
 def qvp_Boxpol():
@@ -401,42 +620,35 @@ def qvp_Boxpol():
     # for noise reduction: only for Bonn
     # wichtig austauschen bei anderen bins
     # aendern
+
+    # funktioniert nur bei 28deg scan
+    # muss noch aus dem scan extrahiert werden
     range_bin_dist = np.arange(50, 35001, 100)
-    # range_bin_dist = np.arange(50,100001,100)
 
-    # range_bin_dist also hardcoded here
-    # range_bin_dist = np.arange(500,60001,1000)
-    # range_bin_dist = np.arange(50,110001,100)
-
-    # aendern
-    bins = 350
-    # bins=1000
-
-    # bins=60
-    # bins=1100
-    azi = 360
-
+    print(file_path)
     file_names = sorted(glob.glob(os.path.join(file_path, '*mvol')))
 
     print(file_names[0])
     # just to get radar_height
-    zh, phi, rho, zdr, vel, dt_src1, no_file, radar_height \
-        = read_file_data(file_names[0])
+    ds0 = boxpol(file_names[0])
 
-    # brauch' ich die folgenden 2 Zeilen? Analoges für BoXPol? eingelesen wird doch darüber?!
-    # odim = wrl.io.read_OPERA_hdf5(file_names[0])
-    # print(odim)
+    # get bins, azi from fist file
+    (azi, bins) = ds0.zh.shape
 
+    # try to load existing data
     try:
-        save = np.load(path2 + '/' + location + '.npz')
+        save = np.load(output_path + '/' + location + '.npz')
+
+        result_data_phi = save['phi']
+        result_data_rho = save['rho']
+        result_data_zdr = save['zdr']
+        result_data_zh = save['zh']
+        radar_height = save['radar_height']
+        dt_src = save['dt_src']
+    # or create data from scratch
     except IOError:
         file_names = sorted(glob.glob(os.path.join(file_path, '*mvol')))
-
-        # geaendert, hier sollen nun nur noch die in der Liste sein, die im gewuenschten Zeitintervall liegen
-        # file_names=file_name_list()
-        # print(file_names)
-        start_time = dt.datetime(2015, 6, 22, 15, 00)
-        end_time = dt.datetime(2015, 6,22, 18, 30)
+        print(file_names)
 
         file_list = []
         for fname in file_names:
@@ -446,36 +658,33 @@ def qvp_Boxpol():
 
         print(file_list)
         file_names = file_list
-
-        #
         n_files = len(file_names)
 
-        result_np_zh = np.zeros((n_files, azi, bins))
-        result_np_phi = np.zeros((n_files, azi, bins))
-        result_np_rho = np.zeros((n_files, azi, bins))
-        result_np_zdr = np.zeros((n_files, azi, bins))
+        # define result arrays
+        result_data_zh = np.zeros((n_files, azi, bins))
+        result_data_phi = np.zeros((n_files, azi, bins))
+        result_data_rho = np.zeros((n_files, azi, bins))
+        result_data_zdr = np.zeros((n_files, azi, bins))
         # -----------------------------------------------------------------
         dt_src = []  # list for time stamps
         # -----------------------------------------------------------------
-        # read data files
+
+        # iterate over files and read data files
 
         for n, fname in enumerate(file_names):
             print("FILENAME:", fname)
-            zh, phi, rho, zdr, vel, dt_src1, no_file, radar_height \
-                = read_file_data(fname)
 
-            print(dt_src1)
+            dsl = boxpol(fname)
+
+            print(dsl.date)
+            print("ZH:", dsl.zh.shape)
+            print("RES:", result_data_zh.shape)
             print("---------> Reading finished")
-            """
-            #read next file - if there is no file --> (no_file=1):
-            """
 
-            if no_file == 1:
-                continue
             # add the offset
-            zh += offset_z
-            phi += offset_phi
-            zdr += offset_zdr
+            dsl.zh += offset_z
+            dsl.phi += offset_phi
+            dsl.zdr += offset_zdr
 
             # noise reduction for rho_hv
             # vorher -23
@@ -484,80 +693,80 @@ def qvp_Boxpol():
             # noise_level = -32
 
             # aendern
-            snr = np.zeros((360, 350))
+            snr = np.zeros((azi, bins))
             # snr = np.zeros((360,1000))
             # snr = np.zeros((360,60))
             # snr = np.zeros((360,1100))
 
             for i in range(360):
-                snr[i, :] = zh[i, :] - 20 * np.log10(range_bin_dist * 0.001) - noise_level - \
+                snr[i, :] = dsl.zh[i, :] - 20 * np.log10(range_bin_dist * 0.001) - noise_level - \
                             0.033 * range_bin_dist / 1000
-            rho = rho * np.sqrt(1. + 1. / 10. ** (snr * 0.1))
+            dsl.rho = dsl.rho * np.sqrt(1. + 1. / 10. ** (snr * 0.1))
 
-            result_np_zh[n, ...] = zh
-            result_np_phi[n, ...] = phi
-            result_np_rho[n, ...] = rho
-            result_np_zdr[n, ...] = zdr
-            dt_src.append(dt_src1)
+            result_data_zh[n, ...] = dsl.zh
+            result_data_phi[n, ...] = dsl.phi
+            result_data_rho[n, ...] = dsl.rho
+            result_data_zdr[n, ...] = dsl.zdr
+            dt_src.append(dsl.date)
 
         # save data to file
-        np.savez(path2 + '/' + location, zh=result_np_zh, rho=result_np_rho,
-                 zdr=result_np_zdr, phi=result_np_phi, dt_src=dt_src)
-        # load again
-        save = np.load(path2 + '/' + location + '.npz')
+        np.savez(output_path + '/' + location, zh=result_data_zh, rho=result_data_rho,
+                 zdr=result_data_zdr, phi=result_data_phi, dt_src=dt_src, radar_height=dsl.radar_height)
 
-    else:
-        # extract data to arrays
-        result_data_phi = save['phi']
-        result_data_rho = save['rho']
-        result_data_zdr = save['zdr']
-        result_data_zh = save['zh']
-        dt_src = save['dt_src']
+    print("Result-Shape:", result_data_phi.shape)
 
-        print("Result-Shape:", result_data_phi.shape)
+    # try top read phi and kdp from file
+    try:
+        save = np.load(output_path + '/' + location + '_phidp_kdp.npz')
+        phi = save['phi']
+        kdp = save['kdp']
+        test = save['test']
+    # or create from scratch
+    except:
+        import copy
+        phi = copy.copy(result_data_phi)
 
-    import copy
-    phi = copy.copy(result_data_phi)
+        # process phidp
+        test = np.zeros_like(phi)
+        kdp = np.zeros_like(phi)
+        for i, v in enumerate(phi):
+            print("Timestep:", i)
+            for j, w in enumerate(v):
+                ma = movingaverage(w, 11, mode='same')
 
-    # process phidp
-    test = np.zeros_like(phi)
-    kdp = np.zeros_like(phi)
-    for i, v in enumerate(phi):
-        print("Timestep:", i)
-        for j, w in enumerate(v):
-            ma = movingaverage(w, 11, mode='same')
+                # window = [-1, 0, 0, 0, 1]
+                # slope = np.convolve(range(len(w)), window, mode='same') / np.convolve(w, window, mode='same')
+                # slope, intercept, r_value, p_value, std_err = stats.linregress(range(len(w)),w)
+                # slope = np.gradient(w)
+                # print(slope.shape)
+                # kdp[i, j, :] = slope
+                test[i, j, :] = ma
+                # test[i, j, result_data_zh[i, j, :] < -5.] = np.nan
+                test[i, j, result_data_zh[i, j, :] < -5.] = np.nan
+                # print(test[i, j, :])
+                first = np.argmax(test[i, j, :] >= 0.)
+                last = np.argmax(test[i, j, ::-1] >= 0)
+                # print("f:", first, test[i, j, first], test[i, j, first-1])
+                # print("l:", last, test[i, j, -last-1], test[i, j, -last])
+                if first:
+                    test[i, j, :first + 1] = test[i, j, first]
+                if last:
+                    test[i, j, -last:] = test[i, j, -last - 1]
 
-            # window = [-1, 0, 0, 0, 1]
-            # slope = np.convolve(range(len(w)), window, mode='same') / np.convolve(w, window, mode='same')
-            # slope, intercept, r_value, p_value, std_err = stats.linregress(range(len(w)),w)
-            # slope = np.gradient(w)
-            # print(slope.shape)
-            # kdp[i, j, :] = slope
-            test[i, j, :] = ma
-            # test[i, j, result_data_zh[i, j, :] < -5.] = np.nan
-            test[i, j, result_data_zh[i, j, :] < -5.] = np.nan
-            # print(test[i, j, :])
-            first = np.argmax(test[i, j, :] >= 0.)
-            last = np.argmax(test[i, j, ::-1] >= 0)
-            # print("f:", first, test[i, j, first], test[i, j, first-1])
-            # print("l:", last, test[i, j, -last-1], test[i, j, -last])
-            if first:
-                test[i, j, :first + 1] = test[i, j, first]
-            if last:
-                test[i, j, -last:] = test[i, j, -last - 1]
+        # get kdp from phidp
 
-    # get kdp from phidp
+        # V1: kdp from convolution, maximum speed
+        kdp = wrl.dp.kdp_from_phidp_convolution(test, L=3, dr=1.0)
 
-    # V1: kdp from convolution, maximum speed
-    kdp = wrl.dp.kdp_from_phidp_convolution(test, L=3, dr=1.0)
+        # V2: fit ala ryzhkov, see function declared above
+        #kdp = kdp_calc(test, wl=11)
 
-    # V2: fit ala ryzhkov, see function declared above
-    #kdp = kdp_calc(test, wl=11)
+        print(kdp.shape)
 
-    print(kdp.shape)
+        # save data to file
+        np.savez(output_path + '/' + location + '_phidp_kdp', phi=phi, kdp=kdp, test=test)
 
     # median calculation
-
     result_data_zh = stats.nanmedian(result_data_zh, axis=1).T
     result_data_rho = stats.nanmedian(result_data_rho, axis=1).T
     result_data_zdr = stats.nanmedian(result_data_zdr, axis=1).T
@@ -600,294 +809,161 @@ def qvp_Boxpol():
     write_textfile(result_data_zdr, 'ZDR', 'zdr_output_' + location + '_' + date[0:4] + \
                    '_' + date[5:7] + '_' + date[8:10] + '.txt', beam_height)
 
-    # time stamps
-    # print(dt_src)
-    # print(dt_src[0], dt_src[-1])
-    dt_start = mdates.date2num(dt_src[0])
-    dt_stop = mdates.date2num(dt_src[-1])
-    # dt_start=start_time
-    # dt_stop=end_time
-    # contour lines
-    # if true plot contours, if false plot pcolormesh
-    contour = True  # False
-    contourlevels = [0, 5, 10, 20, 30]
 
-    # define the colors
-    colors = '#00f8f8', '#01b8fb', '#0000fa', '#00ff00', '#00d000', '#009400', '#ffff00' \
-        , '#f0cc00', '#ff9e00', '#ff0000', '#e40000', '#cc0000', '#ff00ff', '#a06cd5'
+    # COSMO prozessing
+    cosmo_path = '/automount/cluma04/CNRW/CNRW_5.00_grb2/cosmooutput/' \
+                 'out_{0}-{1:02}-{2:02}-00/'.format(start_time.year, start_time.month, start_time.day)
 
-    # -----------------------------------------------------------------
-    # calulate beam_height:
-    # Elevation angle
-    # geloescht, steht doch ein paar Zeilen weiter oben schon ?!
-    # beam_height =( wrl.georef.beam_height_n(np.linspace(0, (bins-1)*1000,bins), 28.0) \
-    # + radar_height)/ 1000
+    ## read grid from gribfile
+    #filename = cosmo_path + 'lfff00{0}{1:02d}00'.format(16,0)
+    #ll_grid = get_grid_from_gribfile(filename)
+
+    # read grid from constants file
+    filename = cosmo_path + 'lfff00000000c'
+    print(filename)
+    rlat = mecc.get_ecc_value_from_file(filename, 'shortName', 'RLAT')
+    rlon = mecc.get_ecc_value_from_file(filename, 'shortName', 'RLON')
+    ll_grid = np.dstack((rlon, rlat))
+    print("rlat, rlon", rlat.shape, rlon.shape)
+
+    # calculate boxpol grid indices
+    boxpol_coords = (7.071663, 50.73052)
+    llx = np.searchsorted(ll_grid[0, :, 0], boxpol_coords[0], side='left')
+    lly = np.searchsorted(ll_grid[:, 0, 1], boxpol_coords[1], side='left')
+    print("Coords Bonn: ({0},{1})".format(llx, lly))
+
+    # read height layers from constants file
+    filename = cosmo_path + 'lfff00000000c'
+    hhl = mecc.get_ecc_value_from_file(filename,
+                                       'shortName',
+                                       'HHL')[llx, lly, ...]
+    # get km from meters
+    hhl = hhl / 1000.
+
+    # reading temperature from associated comso files
+    # getting count of comso files
+    # beware only available from 00:00 to 21:30
+    tcount = int(divmod((end_time - start_time).total_seconds(), 60*30)[0] + 1)
+    print(tcount)
+
+    # create timestamps every full 30th minute (00, 30)
+    cosmo_dt_arr = [(start_time + dt.timedelta(minutes=30 * i)) for i in range(tcount)]
+    cosmo_time_arr = [(start_time + dt.timedelta(minutes=30 * i)).time() for i in range(tcount)]
+    print(cosmo_dt_arr)
+
+    # create temperature array and read from grib files
+    temp = np.zeros((len(cosmo_time_arr), 50))
+    for it, t in enumerate(cosmo_time_arr):
+        filename = cosmo_path + 'lfff00{:%H%M%S}'.format(t)
+        print(filename)
+        temp[it, ...] = mecc.get_ecc_value_from_file(filename, 'shortName', 't')[llx,lly,...]
+
+    # we need degree celsius, not kelvins
+    temp = temp - 273.15
 
     # -----------------------------------------------------------------
     # result_data_... plotting
-    fig1 = plt.figure(figsize=(plot_width, plot_height))
-    fig2 = plt.figure(figsize=(plot_width, plot_height))
-    fig3 = plt.figure(figsize=(plot_width, plot_height))
-    fig4 = plt.figure(figsize=(plot_width, plot_height))
-    fig5 = plt.figure(figsize=(plot_width, plot_height))
-    fig6 = plt.figure(figsize=(plot_width, plot_height))
 
-    ax1 = fig1.add_subplot(111)
-    ax1.set_title('$\mathrm{\mathsf{Z_{H}}}$')
+    # time stamps for plotting
+    dt_start = mdates.date2num(dt_src[0])
+    dt_stop = mdates.date2num(dt_src[-1])
 
-    ax2 = fig2.add_subplot(111)
-    ax2.set_title('$\mathrm{\mathsf{\phi_{DP}}}$')
+    # contour lines
+    # if true plot contours, if false plot pcolormesh
+    contour = True
 
-    ax3 = fig3.add_subplot(111)
-    ax3.set_title(r'$\mathrm{\mathsf{\rho_{hv}}}$')
-
-    ax4 = fig4.add_subplot(111)
-    ax4.set_title('$\mathrm{\mathsf{Z_{DR}}}$')
-
-    ax5 = fig5.add_subplot(111)
-    ax5.set_title('$\mathrm{\mathsf{K_{DP}}}$')
-
-    # y, x = result_data_zdr.shape
-    y = beam_height  # np.arange(x)
-    x = mdates.date2num(dt_src)
-    X, Y = np.meshgrid(x, y)
-    print(X.shape, Y.shape)
-
-    CS1 = ax1.contour(X, Y, result_data_zh, contourlevels, manual='True',
-                      origin='lower', colors='k', alpha=0.8,
-                      linewidths=1,
-                      extent=[dt_start, dt_stop, \
-                              # beam_height[0], beam_height[-1]])
-                              -0.11, beam_height[-1]])
-    ax1.clabel(CS1, fmt='%2.0f', inline=True, fontsize=10)
-
-    CS2 = ax2.contour(X, Y, result_data_zh, contourlevels,
-                      origin='lower', colors='k', alpha=1,
-                      linewidths=1,
-                      extent=[dt_start, dt_stop, \
-                              ##beam_height[0], beam_height[-1]])
-                              -0.11, beam_height[-1]])
-
-    CS3 = ax3.contour(X, Y, result_data_zh, contourlevels,
-                      origin='lower', colors='k',
-                      linewidths=1, alpha=1,
-                      extent=[dt_start, dt_stop, \
-                              # beam_height[0], beam_height[-1]])
-                              -0.11, beam_height[-1]])
-
-    CS4 = ax4.contour(X, Y, result_data_zh, contourlevels,
-                      origin='lower', colors='k',
-                      linewidths=1, alpha=1,
-                      extent=[dt_start, dt_stop, \
-                              # beam_height[0], beam_height[-1]])
-                              -0.11, beam_height[-1]])
-
-    CS5 = ax5.contour(X, Y, result_data_zh, contourlevels,
-                      origin='lower', colors='k',
-                      linewidths=1, alpha=1,
-                      extent=[dt_start, dt_stop, \
-                              # beam_height[0], beam_height[-1]])
-                              -0.11, beam_height[-1]])
+    # zh Contourlevels for zh isoline overlay
+    contourlevels = [0, 5, 10, 20, 30]
 
     # define the colors
-    colors = '#00f8f8', '#01b8fb', '#0000fa', '#00ff00', '#00d000', '#009400', '#ffff00' \
-        , '#f0cc00', '#ff9e00', '#ff0000', '#e40000', '#cc0000', '#ff00ff', '#a06cd5'
+    colors = '#00f8f8', '#01b8fb', '#0000fa', '#00ff00', '#00d000', '#009400', \
+             '#ffff00', '#f0cc00', '#ff9e00', '#ff0000', '#e40000', '#cc0000', \
+             '#ff00ff', '#a06cd5'
 
-    # -----------------------------------------------------------------
-    """
-    ZDR plot
-    """
-    levels = [-2, -1, 0, .1, .2, .3, .4, .5, .6, .8, 1.0, 1.2, 1.5, 2.0, 2.5]
-    # levels=[-2,-1,-0.6,-0.3,0,.1,.2,.3,.4,.5,.6,.8,1.0,1.2,1.5]
-    if contour:
-        im4 = ax4.contourf(result_data_zdr, levels=levels, \
-                           # im4 = ax4.contourf(np.ma.masked_invalid(result_data_zdr),levels=levels, \
-                           colors=colors, origin='lower', axis='equal', extent=[dt_start, dt_stop, \
-                                                                                ##beam_height[0], beam_height[-1]])
-                                                                                -0.11, beam_height[-1]])
-    else:
-        cmap = ListedColormap(colors, name='zdr')
-        norm = BoundaryNorm(levels, ncolors=cmap.N, clip=True)
-        im4 = ax4.pcolormesh(X, Y, result_data_zdr, cmap=cmap, norm=norm)
+    # dictionaries for moments, with some configuration
+    zdr = {'name': 'zdr',
+           'data': result_data_zdr,
+           'levels': [-2, -1, 0, .1, .2, .3, .4, .5, .6, .8, 1.0, 1.2, 1.5,
+                      2.0, 2.5],
+           'title': '$\mathrm{\mathsf{Z_{DR}}}$',
+           'cb_label': 'Differential Reflectivity (dB)'}
 
-    ax4.set_ylim(0, 13)
-    ax4.xaxis_date()
-    ax4.xaxis.set_major_formatter(mdates.DateFormatter('\n%H:%M'))
-    ax4.xaxis.set_major_locator(mdates.HourLocator())
-    ax4.xaxis.set_minor_formatter(mdates.DateFormatter('%M'))
-    ax4.xaxis.set_minor_locator(mdates.MinuteLocator(byminute=(15, 30, 45, 60)))
-    ax4.grid()
-    ax4.set_ylabel('Height (km)')
-    ax4.set_xlabel('Time (UTC)')
+    zh = {'name': 'zh',
+          'data': result_data_zh,
+          'levels': [-10, -5, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50,
+                     60, 65],
+          'title': '$\mathrm{\mathsf{Z_{H}}}$',
+          'cb_label': 'Reflectivity (dBz)'}
 
-    cb4 = fig4.colorbar(im4, orientation='vertical', pad=0.018, aspect=35)
-    cb4.outline.set_visible(False)
-    cbarytks = plt.getp(cb4.ax.axes, 'yticklines')
-    plt.setp(cbarytks, visible=False)
-    cb4.set_ticks(levels[0:-1])
-    cb4.set_ticklabels(["%.2f" % lev for lev in levels[0:-1]])
-    cb4.set_label('Differential Reflectivity (dB)')
-    # -----------------------------------------------------------------
-    """
-    ZH plot
-    """
+    phi = {'name': 'phi',
+           'data': result_data_phi,
+           'levels': [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 25, 30, 35,
+                      40, 100],
+           'title': '$\mathrm{\mathsf{\phi_{DP}}}$',
+           'cb_label': 'Differential Phase (deg)'}
 
-    levels = [-10, -5, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 65]
+    rho = {'name': 'rho',
+           'data': result_data_rho,
+           'levels': [.7, .8, .85, .9, .92, .94, .95, .96, .97, .98, .985,
+                      .99, .995, 1, 1.1],
+           'title': r'$\mathrm{\mathsf{\rho_{hv}}}$',
+           'cb_label': 'Crosscorrelation Coefficient'}
 
-    if contour:
-        im1 = ax1.contourf(result_data_zh, levels=levels, \
-                           ##im1 = ax1.contourf(np.ma.masked_invalid(result_data_zh),levels=levels,\
-                           colors=colors, origin='lower', axis='equal', extent=[dt_start, dt_stop, \
-                                                                                ##beam_height[0], beam_height[-1]])
-                                                                                -0.11, beam_height[-1]])
-    else:
-        cmap = ListedColormap(colors, name='zh')
-        norm = BoundaryNorm(levels, ncolors=cmap.N, clip=True)
-        im1 = ax1.pcolormesh(X, Y, result_data_zh, cmap=cmap, norm=norm)
+    kdp = {'name': 'kdp',
+           'data': result_data_kdp,
+           'levels': [-0.5, -0.1, 0, 0.05, 0.10, 0.20, 0.30, 0.40, 0.60, 0.80,
+                      1.0, 2., 3., 4.],
+           'title': '$\mathrm{\mathsf{K_{DP}}}$',
+           'cb_label': 'Specific differential Phase (deg/km)'}
 
-    ax1.set_aspect('auto')
-    ax1.set_ylim(0, 13)
-    ax1.xaxis_date()
-    ax1.xaxis.set_major_formatter(mdates.DateFormatter('\n%H:%M'))
-    ax1.xaxis.set_major_locator(mdates.HourLocator())
-    ax1.xaxis.set_minor_formatter(mdates.DateFormatter('%M'))
-    ax1.xaxis.set_minor_locator(mdates.MinuteLocator(byminute=(15, 30, 45, 60)))
-    ax1.grid()
-    ax1.set_ylabel('Height (km)')
-    ax1.set_xlabel('Time (UTC)')
+    moments = {'zh': zh ,
+               'zdr': zdr,
+               'phi': phi,
+               'rho': rho,
+               'kdp': kdp
+               }
 
-    cb1 = fig1.colorbar(im1, pad=0.018, orientation='vertical', aspect=35)
-    cb1.outline.set_visible(False)
-    cbarytks = plt.getp(cb1.ax.axes, 'yticklines')
-    plt.setp(cbarytks, visible=False)
-    cb1.set_ticks(levels[0:-1])
-    cb1.set_ticklabels(["%.2f" % lev for lev in levels[0:-1]])
-    cb1.set_label('Reflectivity (dBz)')
-    # -----------------------------------------------------------------
-    """
-    PHI_DP plot
-    """
-    # levels=[0,2,4,6,8,10,12,15,20,25,30,40,50,60,70]
-    levels = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 100]
-    # levels = np.arange(0,30,3)
+    # x-y-grid for radar data
+    y = beam_height
+    x = mdates.date2num(dt_src)
+    X, Y = np.meshgrid(x, y)
 
-    if contour:
-        im2 = ax2.contourf(result_data_phi, levels=levels, \
-                           # im2 = ax2.contourf(np.ma.masked_invalid(result_data_phi),levels=levels,\
-                           colors=colors, origin='lower', axis='equal', extent=[dt_start, dt_stop, \
-                                                                                beam_height[0], beam_height[-1]])
-        # -0.11, beam_height[-1]])
-    else:
-        cmap = ListedColormap(colors, name='phi')
-        cmap = plt.get_cmap('viridis')
-        norm = BoundaryNorm(levels, ncolors=cmap.N, clip=True)
-        im2 = ax2.pcolormesh(X, Y, result_data_phi, cmap=cmap, norm=norm)
-        # im2 = ax2.pcolormesh(result_data_phi, cmap=cmap, norm=norm)
+    # x-y-grid for grib data
+    # we use hhl, so we have to calculate the mid of the layers.
+    y_hhl = np.diff(hhl) / 2 + hhl[:-1]
+    print(y_hhl.shape, hhl.shape)
+    x_temp = mdates.date2num(cosmo_dt_arr)
+    X1, Y1 = np.meshgrid(x_temp, y_hhl)
 
-    ax2.set_aspect('auto')
-    ax2.set_ylim(0, 13)
-    ax2.xaxis_date()
-    ax2.xaxis.set_major_formatter(mdates.DateFormatter('\n%H:%M'))
-    ax2.xaxis.set_major_locator(mdates.HourLocator())
-    ax2.xaxis.set_minor_formatter(mdates.DateFormatter('%M'))
-    ax2.xaxis.set_minor_locator(mdates.MinuteLocator(byminute=(15, 30, 45, 60)))
-    ax2.grid()
-    ax2.set_ylabel('Height (km)')
-    ax2.set_xlabel('Time (UTC)')
+    # cfg dict
+    cfg = {'dt_start': dt_start,
+           'dt_stop': dt_stop,
+           'contour': contour,
+           'contourlevels': contourlevels,
+           'colors': colors,
+           'X': X,
+           'Y': Y,
+           'beam_height': beam_height
+           }
 
-    cb2 = fig2.colorbar(im2, pad=0.018, orientation='vertical', aspect=35)
-    cb2.outline.set_visible(False)
-    cbarytks = plt.getp(cb2.ax.axes, 'yticklines')
-    plt.setp(cbarytks, visible=False)
-    cb2.set_ticks(levels[0:-1])
-    cb2.set_ticklabels(["%.2f" % lev for lev in levels[0:-1]])
-    cb2.set_label('Differential Phase (deg)')
-    # -----------------------------------------------------------------
-    """
-    RHO_HV plot
-    """
-
-    levels = [.7, .8, .85, .9, .92, .94, .95, .96, .97, .98, .985, .99, .995, 1, 1.1]
-
-    if contour:
-        im3 = ax3.contourf(result_data_rho, levels=levels, \
-                           ##im3 = ax3.contourf(np.ma.masked_invalid(result_data_rho),levels=levels,\
-                           colors=colors, origin='lower', axis='equal', extent=[dt_start, dt_stop, \
-                                                                                -0.11, beam_height[-1]])
-    else:
-        cmap = ListedColormap(colors, name='rho')
-        norm = BoundaryNorm(levels, ncolors=cmap.N, clip=True)
-        im3 = ax3.pcolormesh(X, Y, result_data_rho, cmap=cmap, norm=norm)
-
-    ax3.set_aspect('auto')
-    ax3.set_ylim(0, 13)
-    ax3.xaxis_date()
-    ax3.xaxis.set_major_formatter(mdates.DateFormatter('\n%H:%M'))
-    ax3.xaxis.set_major_locator(mdates.HourLocator())
-    ax3.xaxis.set_minor_formatter(mdates.DateFormatter('%M'))
-    ax3.xaxis.set_minor_locator(mdates.MinuteLocator(byminute=(15, 30, 45, 60)))
-    ax3.grid()
-    ax3.set_ylabel('Height (km)')
-    ax3.set_xlabel('Time (UTC)')
-
-    cb3 = fig3.colorbar(im3, orientation='vertical', pad=0.018, aspect=35)
-    cb3.outline.set_visible(False)
-    cbarytks = plt.getp(cb3.ax.axes, 'yticklines')
-    plt.setp(cbarytks, visible=False)
-    cb3.set_ticks(levels[0:-1])
-    cb3.set_ticklabels(["%.3f" % lev for lev in levels[0:-1]])
-    cb3.set_label('Crosscorrelation Coefficient')
-
-    # -----------------------------------------------------------------
-    """
-    KDP plot
-    """
-    levels = [-0.5, -0.1, 0, 0.05, 0.10, 0.20, 0.30, 0.40, 0.60, 0.80, 1.0, 2., 3., 4.]
-    # levels=np.arange(-20,30,1)
-
-    if contour:
-        im5 = ax5.contourf(result_data_kdp, levels=levels, \
-                           colors=colors, origin='lower', axis='equal', extent=[dt_start, dt_stop, \
-                                                                                beam_height[0], beam_height[-1]])
-    else:
-        cmap = ListedColormap(colors, name='kdp')
-        norm = BoundaryNorm(levels, ncolors=cmap.N, clip=True)
-        im5 = ax5.pcolormesh(X, Y, result_data_kdp, cmap=cmap, norm=norm)
-
-    ax5.set_aspect('auto')
-    ax5.set_xlim(dt_src[1], dt_src[-2])
-    ax5.set_ylim(0, 13)
-    ax5.xaxis_date()
-    ax5.xaxis.set_major_formatter(mdates.DateFormatter('\n%H:%M'))
-    ax5.xaxis.set_major_locator(mdates.HourLocator())
-    ax5.xaxis.set_minor_formatter(mdates.DateFormatter('%M'))
-    # ax5.xaxis.set_minor_locator(mdates.MinuteLocator(byminute=(15,30,45,60)))
-    ax5.xaxis.set_minor_locator(mdates.MinuteLocator(byminute=(15, 30, 45, 60)))
-    ax5.grid()
-    ax5.set_ylabel('Height (km)')
-    ax5.set_xlabel('Time (UTC)')
-
-    cb5 = fig5.colorbar(im5, pad=0.018, orientation='vertical', aspect=35)
-    cb5.outline.set_visible(False)
-    cbarytks = plt.getp(cb5.ax.axes, 'yticklines')
-    plt.setp(cbarytks, visible=False)
-    cb5.set_ticks(levels[0:-1])
-    cb5.set_ticklabels(["%.2f" % lev for lev in levels[0:-1]])
-    cb5.set_label('Specific differential Phase (deg/km)')
-
-    # _________________________________save plots __________________________________
-
-    fig1.savefig(plot_path + 'zh_' + location + '_' + date + '.pdf', dpi=300, \
-                 bbox_inches='tight')
-    fig2.savefig(plot_path + 'phi_dp_' + location + '_' + date + '.pdf', dpi=300, \
-                 bbox_inches='tight')
-    fig3.savefig(plot_path + 'rho_hv_' + location + '_' + date + '.pdf', dpi=300, \
-                 bbox_inches='tight')
-    fig4.savefig(plot_path + 'zdr_' + location + '_' + date + '.pdf', dpi=300, \
-                 bbox_inches='tight')
-    fig5.savefig(plot_path + 'kdp_' + location + '_' + date + '.pdf', dpi=300, \
-                 bbox_inches='tight')
-    # ______________________________________________________________________________
+    # iterate over moments dict
+    for k, mom in moments.items():
+        # create figure
+        mom['fig'], mom['ax'] = fig_ax(mom['title'], plot_width, plot_height)
+        # add zh overlay contour
+        add_contour(mom['ax'], X, Y, moments['zh']['data'], contourlevels,
+                    manual='True', origin='lower', colors='k', alpha=0.8,
+                    linewidths=1,
+                    extent=[dt_start, dt_stop, -0.11, beam_height[-1]])
+        # add temperature contour
+        add_contour(mom['ax'], X1, Y1, temp.T, [-15, -10, -5, 0], manual='True',
+                origin='lower', colors='k', alpha=0.8,
+                linewidths=2)
+        # add data to images
+        add_plot(mom, cfg)
+        # save images
+        mom['fig'].savefig(plot_path + mom['name'] + location + '_' + date + '.png',
+                           dpi=300, bbox_inches='tight')
 
     plt.show()
     t2 = dt.datetime.now()
