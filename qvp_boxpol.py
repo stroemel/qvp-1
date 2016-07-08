@@ -44,9 +44,9 @@ end_time = dt.datetime(2015, 6, 22, 18, 30)
 date = '{0}-{1:02d}-{2:02d}'.format(start_time.year, start_time.month, start_time.day)
 location = 'Bonn'
 radar_path='/automount/radar/scans/{0}/{0}-{1:02}/{2}'.format(start_time.year, start_time.month, date)
-output_path = '../output/Riming'
+output_path = '../../output/Riming'
 # choose scan
-file_path = radar_path + '/' + 'n_ppi_280deg/'
+file_path = radar_path + '/' + 'n_ppi_110deg/'
 textfile_path = output_path + '/{0}/textfiles/'.format(date)
 plot_path = output_path + '/{0}/plots/'.format(date)
 
@@ -472,7 +472,7 @@ def qvp_Boxpol():
 
     # try to load existing data
     try:
-        save = np.load(output_path + '/' + location + '_' + date + '.npz')
+        save = np.load(output_path + '/' + location + '_' + str(round(elevation, 1)) + '_' + date + '.npz')
 
         result_data_phi = save['phi']
         result_data_rho = save['rho']
@@ -542,17 +542,18 @@ def qvp_Boxpol():
             result_data_phi[n, ...] = dsl.phi
             result_data_rho[n, ...] = dsl.rho
             result_data_zdr[n, ...] = dsl.zdr
+            radar_height = dsl.radar_height
             dt_src.append(dsl.date)
 
         # save data to file
-        np.savez(output_path + '/' + location + '_' + date, zh=result_data_zh, rho=result_data_rho,
-                 zdr=result_data_zdr, phi=result_data_phi, dt_src=dt_src, radar_height=dsl.radar_height)
+        np.savez(output_path + '/' + location + '_' + str(round(elevation, 1)) + '_' + date, zh=result_data_zh, rho=result_data_rho,
+                 zdr=result_data_zdr, phi=result_data_phi, dt_src=dt_src, radar_height=radar_height)
 
     print("Result-Shape:", result_data_phi.shape)
 
     # try top read phi and kdp from file
     try:
-        save = np.load(output_path + '/' + location + '_' + date + '_phidp_kdp.npz')
+        save = np.load(output_path + '/' + location + '_' + str(round(elevation, 1)) + '_' + date + '_phidp_kdp.npz')
         phi = save['phi']
         kdp = save['kdp']
         test = save['test']
@@ -599,7 +600,7 @@ def qvp_Boxpol():
         print(kdp.shape)
 
         # save data to file
-        np.savez(output_path + '/' + location + '_' + date + '_phidp_kdp', phi=phi, kdp=kdp, test=test)
+        np.savez(output_path + '/' + location + '_' + str(round(elevation, 1)) + '_' + date + '_phidp_kdp', phi=phi, kdp=kdp, test=test)
 
     # median calculation
     result_data_zh = np.nanmedian(result_data_zh, axis=1).T
@@ -812,11 +813,11 @@ def qvp_Boxpol():
         # add data to images
         add_plot(mom, cfg)
         # save images
-        mom['fig'].savefig(plot_path + mom['name'] + location + '_' + date + '.png',
+        mom['fig'].savefig(plot_path + mom['name'] + '_' + location + '_' + str(round(elevation, 1)) + '_' + date + '.png',
                            dpi=300, bbox_inches='tight')
 
         # text output
-        fn = '{0}_output_{1}_{2}.txt'.format(mom['name'], location, date)
+        fn = '{0}_output_{1}_{2}_{3}.txt'.format(mom['name'], location, str(round(elevation, 1)), date)
 
         header = "Radar: {0}\n\n\t{1}-DATA\tDATE: {2}\n".format(
             location, mom['name'].upper(), date)
