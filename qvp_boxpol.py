@@ -36,24 +36,19 @@ process = psutil.Process(os.getpid())
  global data    
 -----------------------------------------------------------------
 """
-date = '2015-06-22'
-
-h1, m1 = (15, 00)
-h2, m2 = (18, 30)
-
-
 # this defines start and end time
 # need to be within the same day
 start_time = dt.datetime(2015, 6, 22, 15, 00)
 end_time = dt.datetime(2015, 6, 22, 18, 30)
 
+date = '{0}-{1:02d}-{2:02d}'.format(start_time.year, start_time.month, start_time.day)
 location = 'Bonn'
-radar_path='/automount/radar/scans/{0}/{0}-{1:02}/{0}-{1:02}-{2:02}'.format(start_time.year, start_time.month, start_time.day)
+radar_path='/automount/radar/scans/{0}/{0}-{1:02}/{2}'.format(start_time.year, start_time.month, date)
 output_path = '../output/Riming'
+# choose scan
 file_path = radar_path + '/' + 'n_ppi_280deg/'
-textfile_path = output_path + '/{0}-{1:02}-{2:02}/textfiles/'.format(start_time.year, start_time.month, start_time.day)
-
-plot_path = output_path + '/{0}-{1:02}-{2:02}/plots/'.format(start_time.year, start_time.month, start_time.day)
+textfile_path = output_path + '/{0}/textfiles/'.format(date)
+plot_path = output_path + '/{0}/plots/'.format(date)
 
 print(radar_path)
 print(output_path)
@@ -125,21 +120,6 @@ def rotated_grid_transform(grid_in, option, SP_coor):
     lat_new = np.rad2deg(lat_new)
 
     return np.dstack((lon_new, lat_new))
-
-# -----------------------------------------------------------------
-
-def next_time(hour, minute):
-    """
-    computes the time 5 minutes later
-    input: actual time as integers
-    return: actual time + 5 minutes as integers
-    """
-    minute = minute + 5
-    if minute >= 60:
-        minute = minute - 60  # geändert
-        hour = hour + 1
-    return hour, minute
-
 
 # -----------------------------------------------------------------
 # -----------------------------------------------------------------
@@ -243,182 +223,6 @@ def read_generic_hdf5(fname):
     f.close()
     return fcontent
 
-
-# -----------------------------------------------------------------
-
-def read_file_data(file_name):
-    """
-    reads data from hdf5-file
-    gelesen werden die Daten zh,phi,rho,zdr mit Zeitstempel.
-    Mit der Rückgabe von no_file=0 wird zum Ausdruck gebracht, dass
-    die Datei korrekt gelesen werden konnte.
-    
-    Im Fehlerfall (Rückgabe n0_file=1) werden Dummy-Daten returniert und 
-    auf den Bildschirm der Name der nicht gefundenen Datei ausgegeben.    
-    """
-    dummy = 0
-    no_file = 0
-    try:
-        data = read_generic_hdf5(file_name)
-
-    except:
-        print("File " + file_name + " nicht vorhanden.")
-        zh = dummy
-        phi = dummy
-        rho = dummy
-        zdr = dummy
-        vel = dummy
-
-        no_file = 1
-        return dummy, dummy, dummy, dummy, dummy, dummy, no_file, dummy
-
-    zh = transform(data['scan0/moment_10']['data'],
-                   data['scan0/moment_10']['attrs']['dyn_range_min'],
-                   data['scan0/moment_10']['attrs']['dyn_range_max'],
-                   data['scan0/moment_10']['attrs']['format'])
-
-    phi = transform(data['scan0/moment_1']['data'],
-                    data['scan0/moment_1']['attrs']['dyn_range_min'],
-                    data['scan0/moment_1']['attrs']['dyn_range_max'],
-                    data['scan0/moment_1']['attrs']['format'])
-
-    rho = transform(data['scan0/moment_2']['data'],
-                    data['scan0/moment_2']['attrs']['dyn_range_min'],
-                    data['scan0/moment_2']['attrs']['dyn_range_max'],
-                    data['scan0/moment_2']['attrs']['format'])
-
-    zdr = transform(data['scan0/moment_9']['data'],
-                    data['scan0/moment_9']['attrs']['dyn_range_min'],
-                    data['scan0/moment_9']['attrs']['dyn_range_max'],
-                    data['scan0/moment_9']['attrs']['format'])
-
-    vel = transform(data['scan0/moment_5']['data'],
-                    data['scan0/moment_5']['attrs']['dyn_range_min'],
-                    data['scan0/moment_5']['attrs']['dyn_range_max'],
-                    data['scan0/moment_5']['attrs']['format'])
-
-    radar_height = data['where']['attrs']['height']
-    s_format = '%SZ'
-    if location == 'Juelich':
-        s_format = '%S.000Z'
-
-    print(data['scan0/how']['attrs']['timestamp'].decode())
-    fstring = '%Y-%m-%dT%H:%M:{0}'.format(s_format)
-    print("Time:", dt.datetime.strptime(data['scan0/how']['attrs']['timestamp'].decode(), fstring))
-
-    return zh, phi, rho, zdr, vel, dt.datetime.strptime(data['scan0/how']['attrs']['timestamp'].decode(),
-                                                        '%Y-%m-%dT%H:%M:' + s_format), no_file, radar_height
-
-
-# -----------------------------------------------------------------
-
-def read_file_data2(file_name):
-    """
-    reads data from hdf5-file
-    gelesen werden die Daten zh,phi,rho,zdr mit Zeitstempel.
-    Mit der Rückgabe von no_file=0 wird zum Ausdruck gebracht, dass
-    die Datei korrekt gelesen werden konnte.
-    
-    Im Fehlerfall (Rückgabe n0_file=1) werden Dummy-Daten returniert und 
-    auf den Bildschirm der Name der nicht gefundenen Datei ausgegeben.    
-    """
-    dummy = 0
-    no_file = 0
-    try:
-        data = read_generic_hdf5(file_name)
-
-    except:
-        print("File " + file_name + " nicht vorhanden.")
-        zh = dummy
-        phi = dummy
-        rho = dummy
-        zdr = dummy
-        no_file = 1
-        return dummy, dummy, dummy, dummy, dummy, no_file, dummy
-
-    zh = transform(data['scan0/moment_10']['data'],
-                   data['scan0/moment_10']['attrs']['dyn_range_min'],
-                   data['scan0/moment_10']['attrs']['dyn_range_max'],
-                   data['scan0/moment_10']['attrs']['format'])
-
-    phi = transform(data['scan0/moment_1']['data'],
-                    data['scan0/moment_1']['attrs']['dyn_range_min'],
-                    data['scan0/moment_1']['attrs']['dyn_range_max'],
-                    data['scan0/moment_1']['attrs']['format'])
-
-    rho = transform(data['scan0/moment_2']['data'],
-                    data['scan0/moment_2']['attrs']['dyn_range_min'],
-                    data['scan0/moment_2']['attrs']['dyn_range_max'],
-                    data['scan0/moment_2']['attrs']['format'])
-
-    zdr = transform(data['scan0/moment_9']['data'],
-                    data['scan0/moment_9']['attrs']['dyn_range_min'],
-                    data['scan0/moment_9']['attrs']['dyn_range_max'],
-                    data['scan0/moment_9']['attrs']['format'])
-    radar_height = data['where']['attrs']['height']
-    s_format = '%SZ'
-    if location == 'Juelich':
-        s_format = '%S.000Z'
-
-    return zh, phi, rho, zdr, dt.datetime.strptime( \
-        data['scan0/how']['attrs']['timestamp'], '%Y-%m-%dT%H:%M:' + \
-                                                 s_format), \
-           no_file, radar_height
-
-
-# -----------------------------------------------------------------
-
-def write_textfile(data, k, filename, bh):
-    """
-    write plot data into a data table file with time (hh:mm) as 
-    x-axis and height (km) as y-axis
-    """
-    s = []
-    y = np.array(["%15.10f" % w for w in data.reshape(data.size)])
-    y = y.reshape(data.shape)
-    z = y.tolist()
-    for n in range(len(z)):
-        a = ''.join(str(e) for e in z[n])
-        s.append(a)
-
-    datei = open(textfile_path + filename, 'w')
-    datei.write(head_lines(k))
-
-    kk = 0
-    for line in s:
-        new_line = "{:4d}".format(kk) + "{:13.3f}".format(bh[kk]) + line + \
-                   '\n'
-        datei.write(new_line)
-        kk = kk + 1
-    datei.close()
-
-
-# -----------------------------------------------------------------
-# -----------------------------------------------------------------
-def head_lines(k):
-    """
-    auxillary function for function write_textfile
-    writing the head line
-    k: type of data (ZH, PHI_DP, RHO_HV or  ZDR)
-    """
-    first_lines = 'Radar:' + location + '\n\n''    ' + k + '-DATA    DATE: ' + date + \
-                  '\n\n  Bin   Height/km'
-    h = h1
-    m = m1
-    while h * 60 + m <= h2 * 60 + m2:
-        hour = str(h)
-        if len(hour) == 1:
-            hour = "0" + hour
-        minute = str(m)
-        if len(minute) == 1:
-            minute = "0" + minute
-        first_lines = first_lines + '     ' + hour + ':' + minute + '     '
-        h, m = next_time(h, m)
-    first_lines = first_lines + '\n\n'
-    return first_lines
-
-
-
 class boxpol(object):
     """
     reads data from hdf5-file
@@ -431,6 +235,8 @@ class boxpol(object):
     """
     def __init__(self, filename, **kwargs):
         data = read_generic_hdf5(filename)
+        #print(data)
+        #exit(9)
         if data is not None:
             self._zh = transform(data['scan0/moment_10']['data'],
                            data['scan0/moment_10']['attrs']['dyn_range_min'],
@@ -458,6 +264,11 @@ class boxpol(object):
                     data['scan0/moment_5']['attrs']['format'])
 
             self._radar_height = data['where']['attrs']['height']
+
+            self._range_samples = data['scan0/how']['attrs']['range_samples']
+            self._range_step = data['scan0/how']['attrs']['range_step']
+            self._bin_count = data['scan0/how']['attrs']['bin_count']
+            self._elevation = data['scan0/how']['attrs']['elevation']
 
             try:
                 self._date = dt.datetime.strptime(data['scan0/how']['attrs']['timestamp'].decode(), '%Y-%m-%dT%H:%M:%SZ')
@@ -515,6 +326,30 @@ class boxpol(object):
         """ Returns DataSource
         """
         return self._radar_height
+
+    @property
+    def range_step(self):
+        """ Returns DataSource
+        """
+        return self._range_step
+
+    @property
+    def bin_count(self):
+        """ Returns DataSource
+        """
+        return self._bin_count
+
+    @property
+    def range_samples(self):
+        """ Returns DataSource
+        """
+        return self._range_samples
+
+    @property
+    def elevation(self):
+        """ Returns DataSource
+        """
+        return self._elevation
 
 
 def fig_ax(title, w, h):
@@ -621,23 +456,23 @@ def qvp_Boxpol():
     # wichtig austauschen bei anderen bins
     # aendern
 
-    # funktioniert nur bei 28deg scan
-    # muss noch aus dem scan extrahiert werden
-    range_bin_dist = np.arange(50, 35001, 100)
-
     print(file_path)
     file_names = sorted(glob.glob(os.path.join(file_path, '*mvol')))
 
     print(file_names[0])
-    # just to get radar_height
-    ds0 = boxpol(file_names[0])
 
+    # get some specifics of the radar data
+    ds0 = boxpol(file_names[0])
+    bin_range = ds0.range_samples * ds0.range_step
+    bin_count = ds0.bin_count
+    range_bin_dist = np.arange(bin_range/2, bin_range*bin_count+1, bin_range)
+    elevation = ds0.elevation
     # get bins, azi from fist file
     (azi, bins) = ds0.zh.shape
 
     # try to load existing data
     try:
-        save = np.load(output_path + '/' + location + '.npz')
+        save = np.load(output_path + '/' + location + '_' + date + '.npz')
 
         result_data_phi = save['phi']
         result_data_rho = save['rho']
@@ -698,7 +533,7 @@ def qvp_Boxpol():
             # snr = np.zeros((360,60))
             # snr = np.zeros((360,1100))
 
-            for i in range(360):
+            for i in range(azi):
                 snr[i, :] = dsl.zh[i, :] - 20 * np.log10(range_bin_dist * 0.001) - noise_level - \
                             0.033 * range_bin_dist / 1000
             dsl.rho = dsl.rho * np.sqrt(1. + 1. / 10. ** (snr * 0.1))
@@ -710,14 +545,14 @@ def qvp_Boxpol():
             dt_src.append(dsl.date)
 
         # save data to file
-        np.savez(output_path + '/' + location, zh=result_data_zh, rho=result_data_rho,
+        np.savez(output_path + '/' + location + '_' + date, zh=result_data_zh, rho=result_data_rho,
                  zdr=result_data_zdr, phi=result_data_phi, dt_src=dt_src, radar_height=dsl.radar_height)
 
     print("Result-Shape:", result_data_phi.shape)
 
     # try top read phi and kdp from file
     try:
-        save = np.load(output_path + '/' + location + '_phidp_kdp.npz')
+        save = np.load(output_path + '/' + location + '_' + date + '_phidp_kdp.npz')
         phi = save['phi']
         kdp = save['kdp']
         test = save['test']
@@ -764,12 +599,12 @@ def qvp_Boxpol():
         print(kdp.shape)
 
         # save data to file
-        np.savez(output_path + '/' + location + '_phidp_kdp', phi=phi, kdp=kdp, test=test)
+        np.savez(output_path + '/' + location + '_' + date + '_phidp_kdp', phi=phi, kdp=kdp, test=test)
 
     # median calculation
-    result_data_zh = stats.nanmedian(result_data_zh, axis=1).T
-    result_data_rho = stats.nanmedian(result_data_rho, axis=1).T
-    result_data_zdr = stats.nanmedian(result_data_zdr, axis=1).T
+    result_data_zh = np.nanmedian(result_data_zh, axis=1).T
+    result_data_rho = np.nanmedian(result_data_rho, axis=1).T
+    result_data_zdr = np.nanmedian(result_data_zdr, axis=1).T
 
     # mask kdp eventually,
     for i in range(360):
@@ -778,7 +613,7 @@ def qvp_Boxpol():
         # print(k1.shape)
         kdp[:, i, :] = k1
 
-    result_data_kdp = stats.nanmedian(kdp, axis=1).T
+    result_data_kdp = np.nanmedian(kdp, axis=1).T
 
     # mask phidp eventually,
     for i in range(360):
@@ -787,32 +622,23 @@ def qvp_Boxpol():
         # print(k1.shape)
         test[:, i, :] = k2
 
-    result_data_phi = stats.nanmedian(test, axis=1).T
+    result_data_phi = np.nanmedian(test, axis=1).T
     # result_data_phi_median = stats.nanmedian(phi, axis=1).T
-
 
     print("SHAPE1:", result_data_phi.shape, result_data_zdr.shape)
     # -----------------------------------------------------------------
     # calulate beam_height: array with 350 elements
     # Elevation angle is hardcoded here
     # aendern
-    beam_height = (wrl.georef.beam_height_n(np.linspace(0, (bins - 1) * 100, bins), 28.0)
+    #beam_height = (wrl.georef.beam_height_n(np.linspace(0, (bins - 1) * 100, bins), 28.0)
+    #               + radar_height) / 1000
+
+    beam_height = (wrl.georef.beam_height_n(range_bin_dist, round(elevation,1))
                    + radar_height) / 1000
-
-    # data output in text files
-    write_textfile(result_data_zh, 'Z_H', 'zh_output_' + location + '_' + date[0:4] + \
-                   '_' + date[5:7] + '_' + date[8:10] + '.txt', beam_height)
-    write_textfile(result_data_phi, 'PHI_DP', 'phi_dp_output_' + location + '_' + \
-                   date[0:4] + '_' + date[5:7] + '_' + date[8:10] + '.txt', beam_height)
-    write_textfile(result_data_rho, 'RHO_HV', 'rho_hv_output_' + location + '_' + \
-                   date[0:4] + '_' + date[5:7] + '_' + date[8:10] + '.txt', beam_height)
-    write_textfile(result_data_zdr, 'ZDR', 'zdr_output_' + location + '_' + date[0:4] + \
-                   '_' + date[5:7] + '_' + date[8:10] + '.txt', beam_height)
-
 
     # COSMO prozessing
     cosmo_path = '/automount/cluma04/CNRW/CNRW_5.00_grb2/cosmooutput/' \
-                 'out_{0}-{1:02}-{2:02}-00/'.format(start_time.year, start_time.month, start_time.day)
+                 'out_{0}-00/'.format(date)
 
     ## read grid from gribfile
     #filename = cosmo_path + 'lfff00{0}{1:02d}00'.format(16,0)
@@ -860,6 +686,30 @@ def qvp_Boxpol():
 
     # we need degree celsius, not kelvins
     temp = temp - 273.15
+
+    # text output temperature
+    fn = '{0}_output_{1}_{2}.txt'.format('temp', location, date)
+
+    header = "Temperature: {0}\tDATE: {1}\n".format(
+        location, date)
+    y_hhl = np.diff(hhl) / 2 + hhl[:-1]
+
+    print(y_hhl.shape, temp)
+
+    index, tindex = temp.T.shape
+    cosmo_time_arr = [(start_time + dt.timedelta(minutes=30 * i)).time() for
+                      i in range(tindex)]
+    header2 = "\nBin Height/km " + ' '.join(
+        ['{0:02d}:{1:02d}'.format(tx.hour, tx.minute) for tx in
+         cosmo_time_arr]) + '\n'
+    iarr = np.array(range(index))
+    fmt = ['%d', '%0.4f'] + ['%0.4f'] * tindex
+    print(iarr.shape, y_hhl.shape, temp.shape)
+    np.savetxt(textfile_path + '/' + fn,
+               np.vstack([iarr, y_hhl[::-1], temp[:,::-1]]).T,
+               fmt=fmt, delimiter=' ',
+               header=header + header2)
+
 
     # -----------------------------------------------------------------
     # result_data_... plotting
@@ -964,6 +814,24 @@ def qvp_Boxpol():
         # save images
         mom['fig'].savefig(plot_path + mom['name'] + location + '_' + date + '.png',
                            dpi=300, bbox_inches='tight')
+
+        # text output
+        fn = '{0}_output_{1}_{2}.txt'.format(mom['name'], location, date)
+
+        header = "Radar: {0}\n\n\t{1}-DATA\tDATE: {2}\n".format(
+            location, mom['name'].upper(), date)
+
+        index, tindex = mom['data'].shape
+        radar_time_arr = [(start_time + dt.timedelta(minutes=5 * i)).time() for
+                          i in range(tindex)]
+        header2 = "\nBin Height/km " + ' '.join(
+            ['{0:02d}:{1:02d}'.format(tx.hour, tx.minute) for tx in
+             radar_time_arr]) + '\n'
+        iarr = np.array(range(index))
+        fmt = ['%d', '%0.4f'] + ['%0.13f'] * tindex
+        np.savetxt(textfile_path + '/' + fn,
+                   np.vstack([iarr, beam_height, mom['data'].T]).T, fmt=fmt,
+                   header=header + header2)
 
     plt.show()
     t2 = dt.datetime.now()
