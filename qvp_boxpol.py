@@ -11,7 +11,6 @@ median averaging for zh, zdr,rho, phi over 360 degrees
 # from cosmo data
 
 import datetime as dt
-
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
@@ -38,15 +37,18 @@ process = psutil.Process(os.getpid())
 """
 # this defines start and end time
 # need to be within the same day
-start_time = dt.datetime(2015, 6, 22, 15, 00)
-end_time = dt.datetime(2015, 6, 22, 18, 30)
+start_time = dt.datetime(2014, 8, 26, 12, 30)
+end_time = dt.datetime(2014, 8, 26, 21, 00)
+#cosmo_end_time = dt.datetime(2014, 8, 26, 21, 00)
 
 date = '{0}-{1:02d}-{2:02d}'.format(start_time.year, start_time.month, start_time.day)
 location = 'Bonn'
-radar_path='/automount/radar/scans/{0}/{0}-{1:02}/{2}'.format(start_time.year, start_time.month, date)
+#radar_path='/automount/radar/scans/{0}/{0}-{1:02}/{2}'.format(start_time.year, start_time.month, date)
+radar_path='/automount/radar-archiv/scans/{0}/{0}-{1:02}/{2}'.format(start_time.year, start_time.month, date)
 output_path = '../../output/Riming'
 # choose scan
 file_path = radar_path + '/' + 'n_ppi_110deg/'
+#file_path = radar_path + '/' + 'n_ppi_280deg/'
 textfile_path = output_path + '/{0}/textfiles/'.format(date)
 plot_path = output_path + '/{0}/plots/'.format(date)
 
@@ -522,9 +524,11 @@ def qvp_Boxpol():
             dsl.zdr += offset_zdr
 
             # noise reduction for rho_hv
-            # vorher -23
+
             # vorher -21
-            noise_level = -23
+            # vorher -23
+            #genommen fuer 2014-08-26
+            noise_level = -22
             # noise_level = -32
 
             # aendern
@@ -592,10 +596,10 @@ def qvp_Boxpol():
         # get kdp from phidp
 
         # V1: kdp from convolution, maximum speed
-        kdp = wrl.dp.kdp_from_phidp_convolution(test, L=3, dr=1.0)
+        #kdp = wrl.dp.kdp_from_phidp_convolution(test, L=3, dr=1.0)
 
         # V2: fit ala ryzhkov, see function declared above
-        #kdp = kdp_calc(test, wl=11)
+        kdp = kdp_calc(test, wl=11)
 
         print(kdp.shape)
 
@@ -637,9 +641,15 @@ def qvp_Boxpol():
     beam_height = (wrl.georef.beam_height_n(range_bin_dist, round(elevation,1))
                    + radar_height) / 1000
 
-    # COSMO prozessing
+    # COSMO prozessing fuer out_2013-03-01-00 bis out_2014-07-07-00
+    #cosmo_path = '/automount/cluma04/CNRW/CNRW_4.23/cosmooutput/' \
+    #             'out_{0}-00/'.format(date)
+
+    # COSMO prozessing fuer out_2014-08-05-00 bis jetzt
     cosmo_path = '/automount/cluma04/CNRW/CNRW_5.00_grb2/cosmooutput/' \
                  'out_{0}-00/'.format(date)
+
+
 
     ## read grid from gribfile
     #filename = cosmo_path + 'lfff00{0}{1:02d}00'.format(16,0)
@@ -669,7 +679,7 @@ def qvp_Boxpol():
 
     # reading temperature from associated comso files
     # getting count of comso files
-    # beware only available from 00:00 to 21:30
+    # beware only available from 00:00 to 21:00
     tcount = int(divmod((end_time - start_time).total_seconds(), 60*30)[0] + 1)
     print(tcount)
 
