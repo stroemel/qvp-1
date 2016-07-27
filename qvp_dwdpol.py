@@ -31,6 +31,9 @@ import wradlib as wrl
 import psutil
 process = psutil.Process(os.getpid())
 
+import warnings
+warnings.filterwarnings('ignore')
+
 """
 -----------------------------------------------------------------
  global data    
@@ -38,15 +41,15 @@ process = psutil.Process(os.getpid())
 """
 # this defines start and end time
 # need to be within the same day
-start_time = dt.datetime(2014, 6, 9, 17, 00)
-end_time = dt.datetime(2014, 6, 9, 21, 00)
+start_time = dt.datetime(2014, 1, 20, 23, 00)
+end_time = dt.datetime(2014, 1, 20, 23, 59)
 
 date = '{0}-{1:02d}-{2:02d}'.format(start_time.year, start_time.month, start_time.day)
 #location = 'Bonn'
 location = 'Berlin'
 #radar_path='/automount/radar/scans/{0}/{0}-{1:02}/{2}'.format(start_time.year, start_time.month, date)
-radar_path='/local/kai/daten/12deg'#.format(start_time.year, start_time.month, date)
-output_path = '../output/Riming'
+radar_path='/home/silke/data/BlitzeisBerlin/Revision'#.format(start_time.year, start_time.month, date)
+output_path = '../../output/Berlin'
 # choose scan
 file_path = radar_path + '/' #+ 'n_ppi_280deg/'
 textfile_path = output_path + '/{0}/textfiles/'.format(date)
@@ -68,9 +71,9 @@ if not os.path.isdir(plot_path):
 plot_width = 9
 plot_height = 7.2
 
-offset_z = 3
-offset_phi = 90
-offset_zdr = 0.8
+offset_z = 0#3
+offset_phi = 0#90
+offset_zdr = 0#0.8
 special_char = ":"
 
 """
@@ -378,9 +381,10 @@ def get_moment(data, num):
     nodata = data['dataset1/data{0}/what'.format(num)]['nodata']
     gain = data['dataset1/data{0}/what'.format(num)]['gain']
     offset = data['dataset1/data{0}/what'.format(num)]['offset']
-    mom = np.ma.masked_equal(mom, nodata)
-    mom = mom * gain + offset
-    return mom
+    #mom = mom * gain + offset
+    ret = np.ma.masked_equal(mom, nodata)
+    ret = ret * gain + offset
+    return ret
 
 class dwdpol(rdata):
     """
@@ -402,7 +406,7 @@ class dwdpol(rdata):
         if data is not None:
             self._zh = get_moment(data, 1)
             self._phi = get_moment(data, 17)
-            self._rho = get_moment(data, 20)
+            self._rho = get_moment(data, 19)
             self._zdr = get_moment(data, 5)
             self._radar_height = data['where']['height']
             self._range_samples = 1
@@ -432,10 +436,10 @@ def add_plot(mom, cfg):
                                  -0.11, cfg['beam_height'][-1]])
     else:
         cmap = ListedColormap(cfg['colors'])  # , name='')
-        norm = BoundaryNorm(levels, ncolors=cmap.N, clip=True)
+        norm = BoundaryNorm(levels, ncolors=cmap.N)#, clip=True)
         im = ax.pcolormesh(cfg['X'], cfg['Y'], mom['data'], cmap=cmap, norm=norm)
 
-    ax.set_ylim(0, 13)
+    ax.set_ylim(0, 4)
     ax.xaxis_date()
     ax.xaxis.set_major_formatter(mdates.DateFormatter('\n%H:%M'))
     ax.xaxis.set_major_locator(mdates.HourLocator())
@@ -517,7 +521,8 @@ def qvp_Boxpol():
     # aendern
 
     print(file_path)
-    file_names = sorted(glob.glob(os.path.join(file_path, 'mvol*')))
+    filetempl = 'mvol*0002'
+    file_names = sorted(glob.glob(os.path.join(file_path, filetempl)))
 
     print(file_names[0])
 
@@ -542,7 +547,7 @@ def qvp_Boxpol():
         dt_src = save['dt_src']
     # or create data from scratch
     except IOError:
-        file_names = sorted(glob.glob(os.path.join(file_path, 'mvol*')))
+        file_names = sorted(glob.glob(os.path.join(file_path, filetempl)))
         print("FNAMES:", file_names)
 
         file_list = []
@@ -597,7 +602,7 @@ def qvp_Boxpol():
             for i in range(azi):
                 snr[i, :] = dsl.zh[i, :] - 20 * np.log10(range_bin_dist * 0.001) - noise_level - \
                             0.033 * range_bin_dist / 1000
-            dsl.rho = dsl.rho * np.sqrt(1. + 1. / 10. ** (snr * 0.1))
+            #dsl.rho = dsl.rho * np.sqrt(1. + 1. / 10. ** (snr * 0.1))
 
             result_data_zh[n, ...] = dsl.zh
             result_data_phi[n, ...] = dsl.phi
@@ -605,6 +610,10 @@ def qvp_Boxpol():
             result_data_zdr[n, ...] = dsl.zdr
             radar_height = dsl.radar_height
             dt_src.append(dsl.date)
+
+        #testplot
+        wrl.vis.plot_cg_ppi(dsl.zdr)
+        plt.show()
 
         # save data to file
         np.savez(output_path + '/' + location + '_' + str(round(elevation, 1)) + '_' + date, zh=result_data_zh, rho=result_data_rho,
@@ -664,9 +673,15 @@ def qvp_Boxpol():
         np.savez(output_path + '/' + location + '_' + str(round(elevation, 1)) + '_' + date + '_phidp_kdp', phi=phi, kdp=kdp, test=test)
 
     # median calculation
-    result_data_zh = np.nanmedian(result_data_zh, axis=1).T
-    result_data_rho = np.nanmedian(result_data_rho, axis=1).T
-    result_data_zdr = np.nanmedian(result_data_zdr, axis=1).T
+    print(result_data_rho)
+    result_data_zh[result_data_rho <= 0.7] = np.nan
+    result_data_zh[result_data_rho > 1.0] = np.nan
+    result_data_zdr[result_data_rho <= 0.7] = np.nan
+    result_data_zdr[result_data_rho > 1.0] = np.nan
+    #result_data_phi[result_data_rho <= 0.7] = np.nan
+
+    result_data_zh = np.nanmean(result_data_zh, axis=1).T
+    result_data_zdr = np.nanmean(result_data_zdr, axis=1).T
 
     # mask kdp eventually,
     for i in range(360):
@@ -675,7 +690,11 @@ def qvp_Boxpol():
         # print(k1.shape)
         kdp[:, i, :] = k1
 
-    result_data_kdp = np.nanmedian(kdp, axis=1).T
+    kdp[result_data_rho <= 0.7] = np.nan
+    kdp[result_data_rho > 1.0] = np.nan
+    result_data_kdp = np.nanmean(kdp, axis=1).T
+
+
 
     # mask phidp eventually,
     for i in range(360):
@@ -684,19 +703,34 @@ def qvp_Boxpol():
         # print(k1.shape)
         test[:, i, :] = k2
 
-    result_data_phi = np.nanmedian(test, axis=1).T
-    # result_data_phi_median = stats.nanmedian(phi, axis=1).T
+    test[result_data_rho <= 0.7] = np.nan
+    test[result_data_rho > 1.0] = np.nan
+    result_data_phi = np.nanmean(test, axis=1).T
+
+    result_data_rho[result_data_rho <= 0.7] = np.nan
+    result_data_rho[result_data_rho > 1.0] = np.nan
+    result_data_rho = np.nanmean(result_data_rho, axis=1).T
+
+    print(np.nanmin(result_data_zdr), np.nanmax(result_data_zdr))
+    result_data_zdr[result_data_zdr >= 20.0] = np.nan
+    result_data_zdr[result_data_zdr <= -5] = np.nan
+    print(np.nanmin(result_data_zdr), np.nanmax(result_data_zdr))
+    # result_data_phi_median = stats.nanmean(phi, axis=1).T
 
     print("SHAPE1:", result_data_phi.shape, result_data_zdr.shape)
+    plt.imshow(result_data_zdr)
+    plt.show()
     # -----------------------------------------------------------------
     # calulate beam_height: array with 350 elements
     # Elevation angle is hardcoded here
     # aendern
     #beam_height = (wrl.georef.beam_height_n(np.linspace(0, (bins - 1) * 100, bins), 28.0)
     #               + radar_height) / 1000
-
+    print(range_bin_dist, round(elevation,1), radar_height)
     beam_height = (wrl.georef.beam_height_n(range_bin_dist, round(elevation,1))
                    + radar_height) / 1000
+
+    print(beam_height)
 
     # # COSMO prozessing
     # cosmo_path = '/automount/cluma04/CNRW/CNRW_5.00_grb2/cosmooutput/' \
@@ -779,7 +813,7 @@ def qvp_Boxpol():
     # time stamps for plotting
     dt_start = mdates.date2num(dt_src[0])
     dt_stop = mdates.date2num(dt_src[-1])
-
+    print(dt_src[0], dt_src[-1])
     # contour lines
     # if true plot contours, if false plot pcolormesh
     contour = True
