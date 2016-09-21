@@ -11,7 +11,6 @@ median averaging for zh, zdr,rho, phi over 360 degrees
 # from cosmo data
 
 import datetime as dt
-
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
@@ -31,9 +30,6 @@ import wradlib as wrl
 import psutil
 process = psutil.Process(os.getpid())
 
-import warnings
-warnings.filterwarnings('ignore')
-
 """
 -----------------------------------------------------------------
  global data    
@@ -41,17 +37,18 @@ warnings.filterwarnings('ignore')
 """
 # this defines start and end time
 # need to be within the same day
-start_time = dt.datetime(2014, 1, 20, 23, 00)
-end_time = dt.datetime(2014, 1, 20, 23, 59)
+start_time = dt.datetime(2014, 8, 26, 12, 30)
+end_time = dt.datetime(2014, 8, 26, 21, 00)
+#cosmo_end_time = dt.datetime(2014, 8, 26, 21, 00)
 
 date = '{0}-{1:02d}-{2:02d}'.format(start_time.year, start_time.month, start_time.day)
-#location = 'Bonn'
-location = 'Berlin'
+location = 'Bonn'
 #radar_path='/automount/radar/scans/{0}/{0}-{1:02}/{2}'.format(start_time.year, start_time.month, date)
-radar_path='/home/silke/data/BlitzeisBerlin/Revision'#.format(start_time.year, start_time.month, date)
-output_path = '../../output/Berlin'
+radar_path='/automount/radar-archiv/scans/{0}/{0}-{1:02}/{2}'.format(start_time.year, start_time.month, date)
+output_path = '../../output/Riming'
 # choose scan
-file_path = radar_path + '/' #+ 'n_ppi_280deg/'
+file_path = radar_path + '/' + 'n_ppi_110deg/'
+#file_path = radar_path + '/' + 'n_ppi_280deg/'
 textfile_path = output_path + '/{0}/textfiles/'.format(date)
 plot_path = output_path + '/{0}/plots/'.format(date)
 
@@ -71,9 +68,9 @@ if not os.path.isdir(plot_path):
 plot_width = 9
 plot_height = 7.2
 
-offset_z = 0#3
-offset_phi = 0#90
-offset_zdr = 0#0.8
+offset_z = 3
+offset_phi = 90
+offset_zdr = 0.8
 special_char = ":"
 
 """
@@ -228,21 +225,57 @@ def read_generic_hdf5(fname):
     f.close()
     return fcontent
 
+class boxpol(object):
+    """
+    reads data from hdf5-file
+    gelesen werden die Daten zh,phi,rho,zdr mit Zeitstempel.
+    Mit der Rückgabe von no_file=0 wird zum Ausdruck gebracht, dass
+    die Datei korrekt gelesen werden konnte.
 
+    Im Fehlerfall (Rückgabe n0_file=1) werden Dummy-Daten returniert und
+    auf den Bildschirm der Name der nicht gefundenen Datei ausgegeben.
+    """
+    def __init__(self, filename, **kwargs):
+        data = read_generic_hdf5(filename)
+        #print(data)
+        #exit(9)
+        if data is not None:
+            self._zh = transform(data['scan0/moment_10']['data'],
+                           data['scan0/moment_10']['attrs']['dyn_range_min'],
+                           data['scan0/moment_10']['attrs']['dyn_range_max'],
+                           data['scan0/moment_10']['attrs']['format'])
 
-class rdata(object):
-    def __init__(self):
-        self._zh = None
-        self._phi = None
-        self._rho = None
-        self._zdr = None
-        self._vel = None
-        self._radar_height = None
-        self._range_samples = None
-        self._range_step = None
-        self._bin_count = None
-        self._elevation = None
-        self._date = None
+            self._phi = transform(data['scan0/moment_1']['data'],
+                            data['scan0/moment_1']['attrs']['dyn_range_min'],
+                            data['scan0/moment_1']['attrs']['dyn_range_max'],
+                            data['scan0/moment_1']['attrs']['format'])
+
+            self._rho = transform(data['scan0/moment_2']['data'],
+                            data['scan0/moment_2']['attrs']['dyn_range_min'],
+                            data['scan0/moment_2']['attrs']['dyn_range_max'],
+                            data['scan0/moment_2']['attrs']['format'])
+
+            self._zdr = transform(data['scan0/moment_9']['data'],
+                            data['scan0/moment_9']['attrs']['dyn_range_min'],
+                            data['scan0/moment_9']['attrs']['dyn_range_max'],
+                            data['scan0/moment_9']['attrs']['format'])
+
+            self._vel = transform(data['scan0/moment_5']['data'],
+                    data['scan0/moment_5']['attrs']['dyn_range_min'],
+                    data['scan0/moment_5']['attrs']['dyn_range_max'],
+                    data['scan0/moment_5']['attrs']['format'])
+
+            self._radar_height = data['where']['attrs']['height']
+
+            self._range_samples = data['scan0/how']['attrs']['range_samples']
+            self._range_step = data['scan0/how']['attrs']['range_step']
+            self._bin_count = data['scan0/how']['attrs']['bin_count']
+            self._elevation = data['scan0/how']['attrs']['elevation']
+
+            try:
+                self._date = dt.datetime.strptime(data['scan0/how']['attrs']['timestamp'].decode(), '%Y-%m-%dT%H:%M:%SZ')
+            except:
+                self._date = dt.datetime.strptime(data['scan0/how']['attrs']['timestamp'].decode(), '%Y-%m-%dT%H:%M:%S.000Z')
 
     @property
     def zh(self):
@@ -321,101 +354,6 @@ class rdata(object):
         return self._elevation
 
 
-class boxpol(rdata):
-    """
-    reads data from hdf5-file
-    gelesen werden die Daten zh,phi,rho,zdr mit Zeitstempel.
-    Mit der Rückgabe von no_file=0 wird zum Ausdruck gebracht, dass
-    die Datei korrekt gelesen werden konnte.
-
-    Im Fehlerfall (Rückgabe n0_file=1) werden Dummy-Daten returniert und
-    auf den Bildschirm der Name der nicht gefundenen Datei ausgegeben.
-    """
-    def __init__(self, filename, **kwargs):
-        super(boxpol, self).__init__()
-        data = read_generic_hdf5(filename)
-        #data = wrl.io.read_OPERA_hdf5(filename)
-        #print(data)
-        #exit(9)
-        if data is not None:
-            self._zh = transform(data['scan0/moment_10']['data'],
-                           data['scan0/moment_10']['attrs']['dyn_range_min'],
-                           data['scan0/moment_10']['attrs']['dyn_range_max'],
-                           data['scan0/moment_10']['attrs']['format'])
-
-            self._phi = transform(data['scan0/moment_1']['data'],
-                            data['scan0/moment_1']['attrs']['dyn_range_min'],
-                            data['scan0/moment_1']['attrs']['dyn_range_max'],
-                            data['scan0/moment_1']['attrs']['format'])
-
-            self._rho = transform(data['scan0/moment_2']['data'],
-                            data['scan0/moment_2']['attrs']['dyn_range_min'],
-                            data['scan0/moment_2']['attrs']['dyn_range_max'],
-                            data['scan0/moment_2']['attrs']['format'])
-
-            self._zdr = transform(data['scan0/moment_9']['data'],
-                            data['scan0/moment_9']['attrs']['dyn_range_min'],
-                            data['scan0/moment_9']['attrs']['dyn_range_max'],
-                            data['scan0/moment_9']['attrs']['format'])
-
-            self._vel = transform(data['scan0/moment_5']['data'],
-                    data['scan0/moment_5']['attrs']['dyn_range_min'],
-                    data['scan0/moment_5']['attrs']['dyn_range_max'],
-                    data['scan0/moment_5']['attrs']['format'])
-
-            self._radar_height = data['where']['attrs']['height']
-
-            self._range_samples = data['scan0/how']['attrs']['range_samples']
-            self._range_step = data['scan0/how']['attrs']['range_step']
-            self._bin_count = data['scan0/how']['attrs']['bin_count']
-            self._elevation = data['scan0/how']['attrs']['elevation']
-
-            try:
-                self._date = dt.datetime.strptime(data['scan0/how']['attrs']['timestamp'].decode(), '%Y-%m-%dT%H:%M:%SZ')
-            except:
-                self._date = dt.datetime.strptime(data['scan0/how']['attrs']['timestamp'].decode(), '%Y-%m-%dT%H:%M:%S.000Z')
-
-
-def get_moment(data, num):
-    mom = data['dataset1/data{0}/data'.format(num)]
-    nodata = data['dataset1/data{0}/what'.format(num)]['nodata']
-    gain = data['dataset1/data{0}/what'.format(num)]['gain']
-    offset = data['dataset1/data{0}/what'.format(num)]['offset']
-    #mom = mom * gain + offset
-    ret = np.ma.masked_equal(mom, nodata)
-    ret = ret * gain + offset
-    return ret
-
-class dwdpol(rdata):
-    """
-    reads data from hdf5-file
-    gelesen werden die Daten zh,phi,rho,zdr mit Zeitstempel.
-    Mit der Rückgabe von no_file=0 wird zum Ausdruck gebracht, dass
-    die Datei korrekt gelesen werden konnte.
-
-    Im Fehlerfall (Rückgabe n0_file=1) werden Dummy-Daten returniert und
-    auf den Bildschirm der Name der nicht gefundenen Datei ausgegeben.
-    """
-    def __init__(self, filename, **kwargs):
-        super(dwdpol, self).__init__()
-        data = wrl.io.read_OPERA_hdf5(filename)
-        #print(data)
-        #print(data['where']['height'])
-        #print(data['what'])
-        #exit(9)
-        if data is not None:
-            self._zh = get_moment(data, 1)
-            self._phi = get_moment(data, 17)
-            self._rho = get_moment(data, 19)
-            self._zdr = get_moment(data, 5)
-            self._radar_height = data['where']['height']
-            self._range_samples = 1
-            self._range_step = data['dataset1/where']['rscale']
-            self._bin_count = data['dataset1/where']['nbins']
-            self._elevation = data['dataset1/where']['elangle']
-
-            self._date = dt.datetime.strptime(data['what']['date']+ data['what']['time'], '%Y%m%d%H%M%S')
-
 def fig_ax(title, w, h):
     fig = plt.figure(figsize=(w, h))
     ax = fig.add_subplot(111)
@@ -436,10 +374,10 @@ def add_plot(mom, cfg):
                                  -0.11, cfg['beam_height'][-1]])
     else:
         cmap = ListedColormap(cfg['colors'])  # , name='')
-        norm = BoundaryNorm(levels, ncolors=cmap.N)#, clip=True)
+        norm = BoundaryNorm(levels, ncolors=cmap.N, clip=True)
         im = ax.pcolormesh(cfg['X'], cfg['Y'], mom['data'], cmap=cmap, norm=norm)
 
-    ax.set_ylim(0, 4)
+    ax.set_ylim(0, 13)
     ax.xaxis_date()
     ax.xaxis.set_major_formatter(mdates.DateFormatter('\n%H:%M'))
     ax.xaxis.set_major_locator(mdates.HourLocator())
@@ -521,13 +459,12 @@ def qvp_Boxpol():
     # aendern
 
     print(file_path)
-    filetempl = 'mvol*0002'
-    file_names = sorted(glob.glob(os.path.join(file_path, filetempl)))
+    file_names = sorted(glob.glob(os.path.join(file_path, '*mvol')))
 
     print(file_names[0])
 
     # get some specifics of the radar data
-    ds0 = dwdpol(file_names[0])
+    ds0 = boxpol(file_names[0])
     bin_range = ds0.range_samples * ds0.range_step
     bin_count = ds0.bin_count
     range_bin_dist = np.arange(bin_range/2, bin_range*bin_count+1, bin_range)
@@ -547,13 +484,12 @@ def qvp_Boxpol():
         dt_src = save['dt_src']
     # or create data from scratch
     except IOError:
-        file_names = sorted(glob.glob(os.path.join(file_path, filetempl)))
-        print("FNAMES:", file_names)
+        file_names = sorted(glob.glob(os.path.join(file_path, '*mvol')))
+        print(file_names)
 
         file_list = []
         for fname in file_names:
-            print(os.path.splitext(os.path.basename(fname))[0].split('_')[1])
-            time = dt.datetime.strptime(os.path.splitext(os.path.basename(fname))[0].split('_')[1], "%Y%m%d%H%M%S")
+            time = dt.datetime.strptime(os.path.splitext(os.path.basename(fname))[0], "%Y-%m-%d--%H:%M:%S,%f")
             if time >= start_time and time <= end_time:
                 file_list.append(fname)
 
@@ -575,7 +511,7 @@ def qvp_Boxpol():
         for n, fname in enumerate(file_names):
             print("FILENAME:", fname)
 
-            dsl = dwdpol(fname)
+            dsl = boxpol(fname)
 
             print(dsl.date)
             print("ZH:", dsl.zh.shape)
@@ -588,9 +524,11 @@ def qvp_Boxpol():
             dsl.zdr += offset_zdr
 
             # noise reduction for rho_hv
-            # vorher -23
+
             # vorher -21
-            noise_level = -23
+            # vorher -23
+            #genommen fuer 2014-08-26
+            noise_level = -22
             # noise_level = -32
 
             # aendern
@@ -602,7 +540,7 @@ def qvp_Boxpol():
             for i in range(azi):
                 snr[i, :] = dsl.zh[i, :] - 20 * np.log10(range_bin_dist * 0.001) - noise_level - \
                             0.033 * range_bin_dist / 1000
-            #dsl.rho = dsl.rho * np.sqrt(1. + 1. / 10. ** (snr * 0.1))
+            dsl.rho = dsl.rho * np.sqrt(1. + 1. / 10. ** (snr * 0.1))
 
             result_data_zh[n, ...] = dsl.zh
             result_data_phi[n, ...] = dsl.phi
@@ -610,10 +548,6 @@ def qvp_Boxpol():
             result_data_zdr[n, ...] = dsl.zdr
             radar_height = dsl.radar_height
             dt_src.append(dsl.date)
-
-        #testplot
-        wrl.vis.plot_cg_ppi(dsl.zdr)
-        plt.show()
 
         # save data to file
         np.savez(output_path + '/' + location + '_' + str(round(elevation, 1)) + '_' + date, zh=result_data_zh, rho=result_data_rho,
@@ -662,10 +596,10 @@ def qvp_Boxpol():
         # get kdp from phidp
 
         # V1: kdp from convolution, maximum speed
-        kdp = wrl.dp.kdp_from_phidp_convolution(test, L=3, dr=1.0)
+        #kdp = wrl.dp.kdp_from_phidp_convolution(test, L=3, dr=1.0)
 
         # V2: fit ala ryzhkov, see function declared above
-        #kdp = kdp_calc(test, wl=11)
+        kdp = kdp_calc(test, wl=11)
 
         print(kdp.shape)
 
@@ -673,15 +607,9 @@ def qvp_Boxpol():
         np.savez(output_path + '/' + location + '_' + str(round(elevation, 1)) + '_' + date + '_phidp_kdp', phi=phi, kdp=kdp, test=test)
 
     # median calculation
-    print(result_data_rho)
-    result_data_zh[result_data_rho <= 0.7] = np.nan
-    result_data_zh[result_data_rho > 1.0] = np.nan
-    result_data_zdr[result_data_rho <= 0.7] = np.nan
-    result_data_zdr[result_data_rho > 1.0] = np.nan
-    #result_data_phi[result_data_rho <= 0.7] = np.nan
-
-    result_data_zh = np.nanmean(result_data_zh, axis=1).T
-    result_data_zdr = np.nanmean(result_data_zdr, axis=1).T
+    result_data_zh = np.nanmedian(result_data_zh, axis=1).T
+    result_data_rho = np.nanmedian(result_data_rho, axis=1).T
+    result_data_zdr = np.nanmedian(result_data_zdr, axis=1).T
 
     # mask kdp eventually,
     for i in range(360):
@@ -690,11 +618,7 @@ def qvp_Boxpol():
         # print(k1.shape)
         kdp[:, i, :] = k1
 
-    kdp[result_data_rho <= 0.7] = np.nan
-    kdp[result_data_rho > 1.0] = np.nan
-    result_data_kdp = np.nanmean(kdp, axis=1).T
-
-
+    result_data_kdp = np.nanmedian(kdp, axis=1).T
 
     # mask phidp eventually,
     for i in range(360):
@@ -703,108 +627,99 @@ def qvp_Boxpol():
         # print(k1.shape)
         test[:, i, :] = k2
 
-    test[result_data_rho <= 0.7] = np.nan
-    test[result_data_rho > 1.0] = np.nan
-    result_data_phi = np.nanmean(test, axis=1).T
-
-    result_data_rho[result_data_rho <= 0.7] = np.nan
-    result_data_rho[result_data_rho > 1.0] = np.nan
-    result_data_rho = np.nanmean(result_data_rho, axis=1).T
-
-    print(np.nanmin(result_data_zdr), np.nanmax(result_data_zdr))
-    result_data_zdr[result_data_zdr >= 20.0] = np.nan
-    result_data_zdr[result_data_zdr <= -5] = np.nan
-    print(np.nanmin(result_data_zdr), np.nanmax(result_data_zdr))
-    # result_data_phi_median = stats.nanmean(phi, axis=1).T
+    result_data_phi = np.nanmedian(test, axis=1).T
+    # result_data_phi_median = stats.nanmedian(phi, axis=1).T
 
     print("SHAPE1:", result_data_phi.shape, result_data_zdr.shape)
-    plt.imshow(result_data_zdr)
-    plt.show()
     # -----------------------------------------------------------------
     # calulate beam_height: array with 350 elements
     # Elevation angle is hardcoded here
     # aendern
     #beam_height = (wrl.georef.beam_height_n(np.linspace(0, (bins - 1) * 100, bins), 28.0)
     #               + radar_height) / 1000
-    print(range_bin_dist, round(elevation,1), radar_height)
+
     beam_height = (wrl.georef.beam_height_n(range_bin_dist, round(elevation,1))
                    + radar_height) / 1000
 
-    print(beam_height)
+    # COSMO prozessing fuer out_2013-03-01-00 bis out_2014-07-07-00
+    #cosmo_path = '/automount/cluma04/CNRW/CNRW_4.23/cosmooutput/' \
+    #             'out_{0}-00/'.format(date)
 
-    # # COSMO prozessing
-    # cosmo_path = '/automount/cluma04/CNRW/CNRW_5.00_grb2/cosmooutput/' \
-    #              'out_{0}-00/'.format(date)
-    #
-    # ## read grid from gribfile
-    # #filename = cosmo_path + 'lfff00{0}{1:02d}00'.format(16,0)
-    # #ll_grid = get_grid_from_gribfile(filename)
-    #
-    # # read grid from constants file
-    # filename = cosmo_path + 'lfff00000000c'
-    # print(filename)
-    # rlat = mecc.get_ecc_value_from_file(filename, 'shortName', 'RLAT')
-    # rlon = mecc.get_ecc_value_from_file(filename, 'shortName', 'RLON')
-    # ll_grid = np.dstack((rlon, rlat))
-    # print("rlat, rlon", rlat.shape, rlon.shape)
-    #
-    # # calculate boxpol grid indices
-    # boxpol_coords = (7.071663, 50.73052)
-    # llx = np.searchsorted(ll_grid[0, :, 0], boxpol_coords[0], side='left')
-    # lly = np.searchsorted(ll_grid[:, 0, 1], boxpol_coords[1], side='left')
-    # print("Coords Bonn: ({0},{1})".format(llx, lly))
-    #
-    # # read height layers from constants file
-    # filename = cosmo_path + 'lfff00000000c'
-    # hhl = mecc.get_ecc_value_from_file(filename,
-    #                                    'shortName',
-    #                                    'HHL')[llx, lly, ...]
-    # # get km from meters
-    # hhl = hhl / 1000.
-    #
-    # # reading temperature from associated comso files
-    # # getting count of comso files
-    # # beware only available from 00:00 to 21:30
-    # tcount = int(divmod((end_time - start_time).total_seconds(), 60*30)[0] + 1)
-    # print(tcount)
-    #
-    # # create timestamps every full 30th minute (00, 30)
-    # cosmo_dt_arr = [(start_time + dt.timedelta(minutes=30 * i)) for i in range(tcount)]
-    # cosmo_time_arr = [(start_time + dt.timedelta(minutes=30 * i)).time() for i in range(tcount)]
-    # print(cosmo_dt_arr)
-    #
-    # # create temperature array and read from grib files
-    # temp = np.zeros((len(cosmo_time_arr), 50))
-    # for it, t in enumerate(cosmo_time_arr):
-    #     filename = cosmo_path + 'lfff00{:%H%M%S}'.format(t)
-    #     print(filename)
-    #     temp[it, ...] = mecc.get_ecc_value_from_file(filename, 'shortName', 't')[llx,lly,...]
-    #
-    # # we need degree celsius, not kelvins
-    # temp = temp - 273.15
-    #
-    # # text output temperature
-    # fn = '{0}_output_{1}_{2}.txt'.format('temp', location, date)
-    #
-    # header = "Temperature: {0}\tDATE: {1}\n".format(
-    #     location, date)
-    # y_hhl = np.diff(hhl) / 2 + hhl[:-1]
-    #
-    # print(y_hhl.shape, temp)
-    #
-    # index, tindex = temp.T.shape
-    # cosmo_time_arr = [(start_time + dt.timedelta(minutes=30 * i)).time() for
-    #                   i in range(tindex)]
-    # header2 = "\nBin Height/km " + ' '.join(
-    #     ['{0:02d}:{1:02d}'.format(tx.hour, tx.minute) for tx in
-    #      cosmo_time_arr]) + '\n'
-    # iarr = np.array(range(index))
-    # fmt = ['%d', '%0.4f'] + ['%0.4f'] * tindex
-    # print(iarr.shape, y_hhl.shape, temp.shape)
-    # np.savetxt(textfile_path + '/' + fn,
-    #            np.vstack([iarr, y_hhl[::-1], temp[:,::-1]]).T,
-    #            fmt=fmt, delimiter=' ',
-    #            header=header + header2)
+    # COSMO prozessing fuer out_2014-08-05-00 bis jetzt
+    cosmo_path = '/automount/cluma04/CNRW/CNRW_5.00_grb2/cosmooutput/' \
+                 'out_{0}-00/'.format(date)
+
+
+
+    ## read grid from gribfile
+    #filename = cosmo_path + 'lfff00{0}{1:02d}00'.format(16,0)
+    #ll_grid = get_grid_from_gribfile(filename)
+
+    # read grid from constants file
+    filename = cosmo_path + 'lfff00000000c'
+    print(filename)
+    rlat = mecc.get_ecc_value_from_file(filename, 'shortName', 'RLAT')
+    rlon = mecc.get_ecc_value_from_file(filename, 'shortName', 'RLON')
+    ll_grid = np.dstack((rlon, rlat))
+    print("rlat, rlon", rlat.shape, rlon.shape)
+
+    # calculate boxpol grid indices
+    boxpol_coords = (7.071663, 50.73052)
+    llx = np.searchsorted(ll_grid[0, :, 0], boxpol_coords[0], side='left')
+    lly = np.searchsorted(ll_grid[:, 0, 1], boxpol_coords[1], side='left')
+    print("Coords Bonn: ({0},{1})".format(llx, lly))
+
+    # read height layers from constants file
+    filename = cosmo_path + 'lfff00000000c'
+    hhl = mecc.get_ecc_value_from_file(filename,
+                                       'shortName',
+                                       'HHL')[llx, lly, ...]
+    # get km from meters
+    hhl = hhl / 1000.
+
+    # reading temperature from associated comso files
+    # getting count of comso files
+    # beware only available from 00:00 to 21:00
+    tcount = int(divmod((end_time - start_time).total_seconds(), 60*30)[0] + 1)
+    print(tcount)
+
+    # create timestamps every full 30th minute (00, 30)
+    cosmo_dt_arr = [(start_time + dt.timedelta(minutes=30 * i)) for i in range(tcount)]
+    cosmo_time_arr = [(start_time + dt.timedelta(minutes=30 * i)).time() for i in range(tcount)]
+    print(cosmo_dt_arr)
+
+    # create temperature array and read from grib files
+    temp = np.zeros((len(cosmo_time_arr), 50))
+    for it, t in enumerate(cosmo_time_arr):
+        filename = cosmo_path + 'lfff00{:%H%M%S}'.format(t)
+        print(filename)
+        temp[it, ...] = mecc.get_ecc_value_from_file(filename, 'shortName', 't')[llx,lly,...]
+
+    # we need degree celsius, not kelvins
+    temp = temp - 273.15
+
+    # text output temperature
+    fn = '{0}_output_{1}_{2}.txt'.format('temp', location, date)
+
+    header = "Temperature: {0}\tDATE: {1}\n".format(
+        location, date)
+    y_hhl = np.diff(hhl) / 2 + hhl[:-1]
+
+    print(y_hhl.shape, temp)
+
+    index, tindex = temp.T.shape
+    cosmo_time_arr = [(start_time + dt.timedelta(minutes=30 * i)).time() for
+                      i in range(tindex)]
+    header2 = "\nBin Height/km " + ' '.join(
+        ['{0:02d}:{1:02d}'.format(tx.hour, tx.minute) for tx in
+         cosmo_time_arr]) + '\n'
+    iarr = np.array(range(index))
+    fmt = ['%d', '%0.4f'] + ['%0.4f'] * tindex
+    print(iarr.shape, y_hhl.shape, temp.shape)
+    np.savetxt(textfile_path + '/' + fn,
+               np.vstack([iarr, y_hhl[::-1], temp[:,::-1]]).T,
+               fmt=fmt, delimiter=' ',
+               header=header + header2)
 
 
     # -----------------------------------------------------------------
@@ -813,7 +728,7 @@ def qvp_Boxpol():
     # time stamps for plotting
     dt_start = mdates.date2num(dt_src[0])
     dt_stop = mdates.date2num(dt_src[-1])
-    print(dt_src[0], dt_src[-1])
+
     # contour lines
     # if true plot contours, if false plot pcolormesh
     contour = True
@@ -874,12 +789,12 @@ def qvp_Boxpol():
     x = mdates.date2num(dt_src)
     X, Y = np.meshgrid(x, y)
 
-    # # x-y-grid for grib data
-    # # we use hhl, so we have to calculate the mid of the layers.
-    # y_hhl = np.diff(hhl) / 2 + hhl[:-1]
-    # print(y_hhl.shape, hhl.shape)
-    # x_temp = mdates.date2num(cosmo_dt_arr)
-    # X1, Y1 = np.meshgrid(x_temp, y_hhl)
+    # x-y-grid for grib data
+    # we use hhl, so we have to calculate the mid of the layers.
+    y_hhl = np.diff(hhl) / 2 + hhl[:-1]
+    print(y_hhl.shape, hhl.shape)
+    x_temp = mdates.date2num(cosmo_dt_arr)
+    X1, Y1 = np.meshgrid(x_temp, y_hhl)
 
     # cfg dict
     cfg = {'dt_start': dt_start,
@@ -901,10 +816,10 @@ def qvp_Boxpol():
                     manual='True', origin='lower', colors='k', alpha=0.8,
                     linewidths=1,
                     extent=[dt_start, dt_stop, -0.11, beam_height[-1]])
-        # # add temperature contour
-        # add_contour(mom['ax'], X1, Y1, temp.T, [-15, -10, -5, 0], manual='True',
-        #         origin='lower', colors='k', alpha=0.8,
-        #         linewidths=2)
+        # add temperature contour
+        add_contour(mom['ax'], X1, Y1, temp.T, [-15, -10, -5, 0], manual='True',
+                origin='lower', colors='k', alpha=0.8,
+                linewidths=2)
         # add data to images
         add_plot(mom, cfg)
         # save images
