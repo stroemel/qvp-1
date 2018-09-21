@@ -12,6 +12,7 @@ median averaging for zh, zdr,rho, phi over 360 degrees
 
 import datetime as dt
 import numpy as np
+import scipy
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.colors import BoundaryNorm
@@ -23,9 +24,12 @@ import miub_eccodes as mecc
 
 
 from scipy import stats
+from scipy import ndimage
 import glob
 import os
 import wradlib as wrl
+import math
+import pandas as pd
 
 import psutil
 process = psutil.Process(os.getpid())
@@ -37,14 +41,22 @@ process = psutil.Process(os.getpid())
 """
 # this defines start and end time
 # need to be within the same day
-start_time = dt.datetime(2014, 8, 26, 12, 30)
-end_time = dt.datetime(2014, 8, 26, 18,40)
+
+#start_time = dt.datetime(2014, 11, 16, 00, 00)
+#end_time = dt.datetime(2014, 11, 16, 9,25)
+
+#start_time = dt.datetime(2017, 7, 25, 16, 30)
+#end_time = dt.datetime(2017, 7, 25, 20,30)
+
+start_time = dt.datetime(2018, 1, 31, 14, 00)
+end_time = dt.datetime(2018, 1, 31, 18, 30)
+
 #cosmo_end_time = dt.datetime(2014, 8, 26, 21, 00)
 
 date = '{0}-{1:02d}-{2:02d}'.format(start_time.year, start_time.month, start_time.day)
 location = 'Bonn'
-#radar_path='/automount/radar/scans/{0}/{0}-{1:02}/{2}'.format(start_time.year, start_time.month, date)
-radar_path='/automount/radar-archiv/scans/{0}/{0}-{1:02}/{2}'.format(start_time.year, start_time.month, date)
+radar_path='/automount/radar/scans/{0}/{0}-{1:02}/{2}'.format(start_time.year, start_time.month, date)
+#radar_path='/automount/radar-archiv/scans/{0}/{0}-{1:02}/{2}'.format(start_time.year, start_time.month, date)
 output_path = '../../output/Riming'
 # choose scan
 #file_path = radar_path + '/' + 'n_ppi_110deg/'
@@ -71,9 +83,12 @@ if not os.path.isdir(plot_path):
 plot_width = 9
 plot_height = 7.2
 
-offset_z = 3
-offset_phi = 92
-offset_zdr = 0.6
+#offset_z = 3
+offset_z = 2.2
+#offset_phi = -85
+offset_phi = -85
+#offset_zdr = 0.6
+offset_zdr = 0.2
 special_char = ":"
 
 """
@@ -243,25 +258,25 @@ class boxpol(object):
         #print(data)
         #exit(9)
         if data is not None:
-            self._zh = transform(data['scan0/moment_10']['data'],
-                           data['scan0/moment_10']['attrs']['dyn_range_min'],
-                           data['scan0/moment_10']['attrs']['dyn_range_max'],
-                           data['scan0/moment_10']['attrs']['format'])
+            self._zh = transform(data['scan0/moment_0']['data'],
+                           data['scan0/moment_0']['attrs']['dyn_range_min'],
+                           data['scan0/moment_0']['attrs']['dyn_range_max'],
+                           data['scan0/moment_0']['attrs']['format'])
 
-            self._phi = transform(data['scan0/moment_1']['data'],
-                            data['scan0/moment_1']['attrs']['dyn_range_min'],
-                            data['scan0/moment_1']['attrs']['dyn_range_max'],
-                            data['scan0/moment_1']['attrs']['format'])
-
-            self._rho = transform(data['scan0/moment_2']['data'],
-                            data['scan0/moment_2']['attrs']['dyn_range_min'],
-                            data['scan0/moment_2']['attrs']['dyn_range_max'],
-                            data['scan0/moment_2']['attrs']['format'])
-
-            self._zdr = transform(data['scan0/moment_9']['data'],
+            self._phi = transform(data['scan0/moment_9']['data'],
                             data['scan0/moment_9']['attrs']['dyn_range_min'],
                             data['scan0/moment_9']['attrs']['dyn_range_max'],
                             data['scan0/moment_9']['attrs']['format'])
+
+            self._rho = transform(data['scan0/moment_11']['data'],
+                            data['scan0/moment_11']['attrs']['dyn_range_min'],
+                            data['scan0/moment_11']['attrs']['dyn_range_max'],
+                            data['scan0/moment_11']['attrs']['format'])
+
+            self._zdr = transform(data['scan0/moment_4']['data'],
+                            data['scan0/moment_4']['attrs']['dyn_range_min'],
+                            data['scan0/moment_4']['attrs']['dyn_range_max'],
+                            data['scan0/moment_4']['attrs']['format'])
 
             self._vel = transform(data['scan0/moment_5']['data'],
                     data['scan0/moment_5']['attrs']['dyn_range_min'],
@@ -275,10 +290,11 @@ class boxpol(object):
             self._bin_count = data['scan0/how']['attrs']['bin_count']
             self._elevation = data['scan0/how']['attrs']['elevation']
 
+            print(data['scan0/how']['attrs']['timestamp'].decode())
             try:
                 self._date = dt.datetime.strptime(data['scan0/how']['attrs']['timestamp'].decode(), '%Y-%m-%dT%H:%M:%SZ')
             except:
-                self._date = dt.datetime.strptime(data['scan0/how']['attrs']['timestamp'].decode(), '%Y-%m-%dT%H:%M:%S.000Z')
+                self._date = dt.datetime.strptime(data['scan0/how']['attrs']['timestamp'].decode(), '%Y-%m-%dT%H:%M:%S.%fZ')
 
     @property
     def zh(self):
@@ -362,6 +378,216 @@ def fig_ax(title, w, h):
     ax = fig.add_subplot(111)
     ax.set_title(title)
     return fig, ax
+
+
+def melting_layer_qvp(qvp_zh, qvp_zdr, qvp_rhohv, elevation, dr, nbins, height_limit=""):
+    """
+    A melting layer detection method based on QVP data of ZH, ZDR, and RHOHV. Returns the location of the
+    top and bottom of the melting layer.
+
+    Inputs are....
+    -QVP data of ZH, ZDR, and RHOhv (qvp_zh,qvp_zdr,qvp_rhohv).where x is height, and y is
+    -The elevation angle of the qvps (elevation).
+    -The range step (dr)
+    -The number of bins for range(bins)
+    -Height_limit is optional limit. It will cut the data to certain height. This can improve the functioning because sometimes the top of the clouds produce problems.
+
+    Created on Tuesday April 11 2017
+
+    bhickman@uni-bonn.de
+
+
+    """
+    re = 6374000.
+    ke = 4. / 3.
+    range_bin_dist = dr
+    radar_height = 99.5
+    print(type(nbins))
+    r = np.linspace(0, (nbins - 1) * dr, nbins)
+    print(r.shape)
+    # beam_height=(np.sqrt( r**2 + (ke*re)**2 + 2*r*ke*re*np.sin(np.radians(elevation)) )- ke*re)/1000
+    beam_height = (wrl.georef.beam_height_n(r, round(elevation, 1))
+                   + radar_height) / 1000.
+    print(beam_height)
+    ############################################################
+    # Step 1Normalize QVP data
+
+    # initiating empty arraysfor normalized data
+    z0 = np.zeros((qvp_zh.shape[0], qvp_zh.shape[1]))
+    rho0 = np.zeros((qvp_zh.shape[0], qvp_zh.shape[1]))
+    zdr0 = np.zeros((qvp_zh.shape[0], qvp_zh.shape[1]))
+
+    for ii in range(z0.shape[1]):
+        # normalize Z
+        z = np.copy(qvp_zh[:, ii])
+        zmask = np.where((z < -10) | (z > 60))
+        z[zmask] = np.nan
+        z0[:, ii] = (z - np.nanmin(z)) / (np.nanmax(z) - np.nanmin(z))
+
+        # normalize rho
+        rho = np.copy(qvp_rhohv[:, ii])
+        rhomask = np.where((rho < 0.65) | (rho > 1))  # rho thresholds
+        rho[rhomask] = np.nan
+        rho0[:, ii] = (rho - np.nanmin(rho)) / (np.nanmax(rho) - np.nanmin(rho))
+
+        # normalize ZDR
+        zd = np.copy(qvp_zdr[:, ii])
+        zdmask = np.where((zd < -1) | (zd > 4))
+        zd[zdmask] = np.nan
+        zdr0[:, ii] = (zd - np.nanmin(zd)) / (np.nanmax(zd) - np.nanmin(zd))
+
+    ############################################################
+    # removing profiles with too few data (>93% of array is nan)
+    per = np.zeros(z0.shape[1])
+    for ii in range(z0.shape[1]):
+        zt = z0[:, ii]
+        tnan = np.count_nonzero(np.isnan(zt))
+        tot = np.float(z0.shape[0])
+        per[ii] = tnan / tot * 100
+    for ii in range(z0.shape[1]):
+        if per[ii] >= 93.:
+            z0[:, ii] = np.nan
+            zdr0[:, ii] = np.nan
+            rho0[:, ii] = np.nan
+        else:
+            z0[:, ii] = z0[:, ii]
+            zdr0[:, ii] = zdr0[:, ii]
+            rho0[:, ii] = rho0[:, ii]
+
+            ############################################################
+    #### Step 2combining three normalized variables into single varible (IMcomb) ####
+    # IMcomb =(zdr0*(1-rho0)*z0)
+    ## A try for cases where identified bottom is above top of ML
+    IMcomb = (zdr0 * zdr0 * (1 - rho0) * z0)
+
+    ############################################################
+    #### STEP 3 SOBEL Filter ####
+    dy = ndimage.sobel(IMcomb, 0)
+
+    ############################################################
+    #### STEP 4 Threshold ####
+    ml_mask = np.where(np.abs(dy) < .02)
+    dy[ml_mask] = 0.
+
+    ############################################################
+    # Step 4b Height mask
+    if not height_limit:
+        height_limit = ""
+    else:
+        height_limit = np.asfarray(height_limit)
+        height_mask = np.where(beam_height > height_limit)
+        dy[height_mask] = np.nan
+
+    ############################################################
+    #### Step 5 ML Height min and max ####
+    mlh_ind = np.zeros(IMcomb.shape[1])
+    ml_top = np.zeros(dy.shape[1])
+    ml_bottom = np.zeros(dy.shape[1])
+    mlh_top = np.zeros(dy.shape[1])
+    mlh_bottom = np.zeros(dy.shape[1])
+    for ii in range(dy.shape[1]):
+        d = dy[:, ii]
+        # print np.nansum(d), ii
+        if np.nansum(d) == math.isnan(np.nansum(d)):
+            ml_bottom[ii] = -999
+        else:
+            ml_bottom[ii] = np.nanargmax(d)
+        if np.nansum(d) == math.isnan(np.nansum(d)):
+            ml_top[ii] = 999
+        else:
+            ml_top[ii] = np.nanargmin(d)
+
+    for ii in range(dy.shape[1]):
+        if ml_bottom[ii] == -999:
+            mlh_bottom[ii] = -999
+        else:
+            # print("ml_bottom[ii]",ml_bottom[ii])
+            mlh_bottom[ii] = beam_height[int(ml_bottom[ii])]
+
+    mlh_bottom[mlh_bottom == -999] = np.nan
+    for ii in range(dy.shape[1]):
+        if ml_top[ii] == 999:
+            mlh_top[ii] = 999
+        else:
+            mlh_top[ii] = beam_height[int(ml_top[ii])]
+    mlh_top[mlh_top == 999] = np.nan
+
+    # Remove MLH_top which are below the MLH_bottom
+    for ii in range(len(mlh_bottom)):
+        if mlh_top[ii] <= mlh_bottom[ii]:
+            mlh_top[ii] = np.nan
+
+    ############################################################
+    #### Step 6 Median ML ######
+    MED_mlh_bot = pd.rolling_median(mlh_bottom, min_periods=1, center=False, window=36)
+    MED_mlh_top = pd.rolling_median(mlh_top, min_periods=1, center=False, window=36)
+
+    if qvp_zh.ndim > 1:
+        bh = np.array([beam_height, ] * qvp_zh.shape[1]).transpose()
+    else:
+        bh = beam_height
+
+    ############################################################
+    # Step 7: Step 5 is run again, but this time after discarding the gradient image above ...
+    # (1 + fML,height) · MED_mlh_top and below (1 − fML,height ) · MED_mlh_bot , assuming the ML is a relatively
+    # flat structure. This helps to remove the possible contamination by ground echoes or small embedded cells
+    # of intense rainfall. The chosen value for fML,height is 0.3
+    mlh_ind = np.zeros(IMcomb.shape[1])
+
+    ml_top = np.zeros(IMcomb.shape[1])
+    ml_bottom = np.zeros(IMcomb.shape[1])
+
+    fMLH = 0.3
+    IMabove = (1 + fMLH) * MED_mlh_top
+    IMbelow = (1 - fMLH) * MED_mlh_bot
+
+    h_ind = np.where((bh > IMabove) | (bh < IMbelow))
+    ml_new = np.copy(dy)
+    ml_new[h_ind] = np.nan
+    mlh_top = np.zeros(ml_new.shape[1])
+    mlh_bottom = np.zeros(ml_new.shape[1])
+    for ii in range(dy.shape[1]):
+        d = ml_new[:, ii]
+        if np.nansum(d) == math.isnan(np.nansum(d)):
+            ml_bottom[ii] = -999
+        else:
+            ml_bottom[ii] = np.nanargmax(d)
+        if np.nansum(d) == math.isnan(np.nansum(d)):
+            ml_top[ii] = 999
+        else:
+            ml_top[ii] = np.nanargmin(d)
+
+    for ii in range(dy.shape[1]):
+        if ml_bottom[ii] == -999:
+            mlh_bottom[ii] = -999
+        else:
+            mlh_bottom[ii] = beam_height[int(ml_bottom[ii])]
+    mlh_bottom[mlh_bottom == -999] = np.nan
+
+    for ii in range(ml_new.shape[1]):
+        if ml_top[ii] == 999:
+            mlh_top[ii] = 999
+        else:
+            mlh_top[ii] = beam_height[int(ml_top[ii])]
+    mlh_top[mlh_top == 999] = np.nan
+
+    # Remove MLH_top which are below the MLH_bottom
+    for ii in range(len(mlh_bottom)):
+        if mlh_top[ii] <= mlh_bottom[ii]:
+            # A try for very low MLs
+            # mlh_top[ii]=np.nan
+            # mlh_bottom[ii]=np.nan
+            mlh_bottom[ii] = beam_height[int(1)]
+            ml_bottom[ii] = 1
+
+    # print 'MLH bottom', np.nanmedian(mlh_bottom), 'MLH top', np.nanmedian(mlh_top)
+    # print 'MLH bottom',np.nanmedian(mlh_bottom2),'MLH top', np.nanmedian(mlh_top2)
+
+    # MED_mlh_bot=pd.rolling_median(mlh_bottom,min_periods=1,center=False,window=12)
+    # MED_mlh_top=pd.rolling_median(mlh_top,min_periods=1,center=False,window=12)
+
+    print("MLTOP:", ml_top)
+    return mlh_top, mlh_bottom, ml_top, ml_bottom, beam_height
 
 def add_contour(ax, X, Y, data, levels, **kwargs):
     cs = ax.contour(X, Y, data, levels, **kwargs)
@@ -467,13 +693,16 @@ def qvp_Boxpol():
     # aendern
 
     print(file_path)
-    file_names = sorted(glob.glob(os.path.join(file_path, '*mvol')))
+    #file_names = sorted(glob.glob(os.path.join(file_path, '*mvol')))
+    file_names = sorted(glob.glob(os.path.join(file_path, '*h5')))
 
-    print(file_names[0])
+    print("First file:", file_names[0])
 
     # get some specifics of the radar data
     ds0 = boxpol(file_names[0])
     bin_range = ds0.range_samples * ds0.range_step
+    dr = bin_range / 1000.
+    print("BinRange:", bin_range)
     bin_count = ds0.bin_count
     range_bin_dist = np.arange(bin_range/2, bin_range*bin_count+1, bin_range)
     elevation = ds0.elevation
@@ -492,12 +721,14 @@ def qvp_Boxpol():
         dt_src = save['dt_src']
     # or create data from scratch
     except IOError:
-        file_names = sorted(glob.glob(os.path.join(file_path, '*mvol')))
+        file_names = sorted(glob.glob(os.path.join(file_path, '*.h5')))
         print(file_names)
 
         file_list = []
         for fname in file_names:
-            time = dt.datetime.strptime(os.path.splitext(os.path.basename(fname))[0], "%Y-%m-%d--%H:%M:%S,%f")
+            fn1 = os.path.splitext(os.path.basename(fname))[0]
+            fn2 = fn1.split('_')[-2]
+            time = dt.datetime.strptime(fn2, "%Y%m%d%H%M%S")
             if time >= start_time and time <= end_time:
                 file_list.append(fname)
 
@@ -533,7 +764,7 @@ def qvp_Boxpol():
 
             # noise reduction for rho_hv
 
-            noise_level = -22
+            noise_level = -20
             # vorher -23, -22 probiert zu hohen rho
             #genommen fuer 2014-08-26
             # fuer Florian angegeben noise_level = -23
@@ -544,16 +775,17 @@ def qvp_Boxpol():
             # snr = np.zeros((360,1000))
             # snr = np.zeros((360,60))
             # snr = np.zeros((360,1100))
-
+            print("AZI:", azi, dsl.rho.shape)
             for i in range(azi):
                 snr[i, :] = dsl.zh[i, :] - 20 * np.log10(range_bin_dist * 0.001) - noise_level - \
                             0.033 * range_bin_dist / 1000
-            dsl.rho = dsl.rho * np.sqrt(1. + 1. / 10. ** (snr * 0.1))
 
-            result_data_zh[n, ...] = dsl.zh
-            result_data_phi[n, ...] = dsl.phi
-            result_data_rho[n, ...] = dsl.rho
-            result_data_zdr[n, ...] = dsl.zdr
+            dsl.rho = dsl.rho[:azi] * np.sqrt(1. + 1. / 10. ** (snr[:azi] * 0.1))
+
+            result_data_zh[n, ...] = dsl.zh[:azi]
+            result_data_phi[n, ...] = dsl.phi[:azi]
+            result_data_rho[n, ...] = dsl.rho[:azi]
+            result_data_zdr[n, ...] = dsl.zdr[:azi]
             radar_height = dsl.radar_height
             dt_src.append(dsl.date)
 
@@ -607,7 +839,8 @@ def qvp_Boxpol():
         # get kdp from phidp
 
         # V1: kdp from convolution, maximum speed
-        kdp = wrl.dp.kdp_from_phidp_convolution(test, L=11, dr=0.1)
+        #vorher mit L=11
+        kdp = wrl.dp.kdp_from_phidp_convolution(test, L=21, dr=dr)
 
         # V2: fit ala ryzhkov, see function declared above
         #kdp = kdp_calc(test, wl=11)
@@ -647,6 +880,7 @@ def qvp_Boxpol():
 
     result_data_kdp = np.nanmedian(kdp, axis=1).T
 
+
     # mask phidp eventually,
     for i in range(360):
         k2 = test[:, i, :]
@@ -670,8 +904,83 @@ def qvp_Boxpol():
     beam_height = (wrl.georef.beam_height_n(range_bin_dist, round(elevation,1))
                    + radar_height) / 1000
 
+    # Calculate new kdp, based on modified phidp which does not include delta in the ML
+    ############################################################
+    #modified phidp
+    print("SHAPES:", result_data_phi.shape, result_data_kdp.shape, result_data_zh.shape)
+    phi2 = result_data_phi.copy()
+    elevation = 18.0
+    dr1 = bin_range
+    nbins = result_data_zh.shape[0]  # andersrum? erst times dann bins?
+    times = result_data_zh.shape[1]
+    toph, bottomh, topi, bottomi, bh = melting_layer_qvp(result_data_zh, result_data_zdr, result_data_rho,
+                                                         elevation, dr1, nbins, height_limit=4.)
+    #diffml=np.zeros(times)
+    #print("ML", topi, bottomi, phi2.shape)
+    #Fusch
+    #topi=topi-980
+    #bottomi=bottomi+1040
+    print(toph)
+    indexx=np.zeros(times)
+    for i in range(times):
+        #vorher zwischen 10 und 20 gesucht
+        if (topi[i] != 999):
+            default = topi[i]
+        if (topi[i] == 999):
+            topi[i] = default
+        if (bottomi[i] != -999):
+            defaultb = bottomi[i]
+        if (bottomi[i] == -999):
+            bottomi[i] = defaultb
+        print("ML", int(topi[i] + 7), int(topi[i] + 17))
+        print("PHI:", phi2.shape)
+        print("TIMES:", i, phi2[int(topi[i] + 7):int(topi[i] + 17), i])
+        #print("TIMES:", i, phi2[0:100,i])
+        index = int(topi[i] + 7) + np.argmin(phi2[int(topi[i] + 7):int(topi[i] + 17), i])
+        indexx[i]=index
+        indexu = int(bottomi[i] - 7)
+        diffml = phi2[index, i] - phi2[indexu, i]
+        steps=index-indexu
+        for l in range(steps):
+            phi2[indexu+l, i]= phi2[indexu, i] + l*(diffml/steps)
+
+    #modified kdp
+    result_data_phi2 = phi2.copy()
+    #vorher mit L=11
+    result_data_kdp2 = wrl.dp.kdp_from_phidp_convolution(result_data_phi2.T, L=21, dr=dr).T
+    ############################################################
+    ##### Einschub Retrieval Alexander Ryzhkov
+    zv=result_data_zh - result_data_zdr
+    zhlin= wrl.trafo.idecibel(result_data_zh)
+    zvlin = wrl.trafo.idecibel(zv)
+    zdp=zhlin-zvlin
+    ratio=(zdp/result_data_kdp2/32.)**(1/3.)
+    ratio_mask = np.where(ratio <= .15)
+    kdp2_mask = np.where(result_data_kdp2 < 0.01)
+    ratio[ratio_mask] = np.nan
+    result_data_dm = -0.17 + 1.41*ratio + 0.715*ratio**2.
+    result_data_dm[kdp2_mask] = np.nan
+    result_data_logNt= 0.16 + 0.1* result_data_zh - 4.16 * np.log10(result_data_dm)
+    result_data_logNt[kdp2_mask] = np.nan
+    #print(result_data_logNt)
+    result_data_logIWC = -1.96 + result_data_logNt + 2.08 * np.log10(result_data_dm)
+    result_data_logIWC[kdp2_mask] = np.nan
+    #noch nicht-pol Variante von Hogan et al.
+    # result_data_logIWC_Z = 0.06 * result_data_zh - 0.02 * temp_new - 1.7
+    # #
+    # for i in range(times):
+    #     result_data_dm[0:int(indexx[i]),i]=np.nan
+    #     result_data_logIWC[0:int(indexx[i]), i] = np.nan
+    #     result_data_logNt[0:int(indexx[i]), i] = np.nan
+    #     result_data_logIWC_Z[0:int(indexx[i]), i] = np.nan
+
+
+    #print(result_data_logIWC)
+    ############################################################
     #COSMO prozessing fuer out_2013-03-01-00 bis out_2014-07-07-00
-    cosmo_path = '/automount/cluma04/CNRW/CNRW_4.23/cosmooutput/' \
+    #cosmo_path = '/automount/cluma04/CNRW/CNRW_4.23/cosmooutput/' \
+    #             'out_{0}-00/'.format(date)
+    cosmo_path = '/automount/cluma04/CNRW/CNRW5_output/' \
                  'out_{0}-00/'.format(date)
 
     # COSMO prozessing fuer out_2014-08-05-00 bis jetzt
@@ -695,8 +1004,10 @@ def qvp_Boxpol():
 
         # calculate juxpol grid indices
         juxpol_coords = (6.4569489, 50.9287272)
-        llx = np.searchsorted(ll_grid[0, :, 0], juxpol_coords[0], side='left')
-        lly = np.searchsorted(ll_grid[:, 0, 1], juxpol_coords[1], side='left')
+        # calculate boxpol grid indices
+        boxpol_coords = (7.071663, 50.73052)
+        llx = np.searchsorted(ll_grid[0, :, 0], boxpol_coords[0], side='left')
+        lly = np.searchsorted(ll_grid[:, 0, 1], boxpol_coords[1], side='left')
         print("Coords Juelich: ({0},{1})".format(llx, lly))
 
         # read height layers from constants file
@@ -739,7 +1050,14 @@ def qvp_Boxpol():
         y_hhl = np.diff(hhl) / 2 + hhl[:-1]
 
         print(y_hhl.shape, temp)
-
+        #eingefuegt, richtig?
+        cosmotime = np.array([(ct - dt.datetime(1970, 1, 1)).total_seconds() for ct in cosmo_dt_arr])
+        print(cosmotime.shape, hhl.shape, temp.shape)
+        f = scipy.interpolate.interp2d(cosmotime, y_hhl, temp.T, kind='cubic')
+        y = beam_height
+        x = mdates.date2num(dt_src)
+        temp_new = f(x, y)
+        #######
         index, tindex = temp.T.shape
         cosmo_time_arr = [(start_time + dt.timedelta(minutes=30 * i)).time() for
                           i in range(tindex)]
@@ -753,6 +1071,14 @@ def qvp_Boxpol():
                    np.vstack([iarr, y_hhl[::-1], temp[:, ::-1]]).T,
                    fmt=fmt, delimiter=' ',
                    header=header + header2)
+
+    result_data_logIWC_Z = 0.06 * result_data_zh - 0.02 * temp_new - 1.7
+    #
+    for i in range(times):
+        result_data_dm[0:int(indexx[i]), i] = np.nan
+        result_data_logIWC[0:int(indexx[i]), i] = np.nan
+        result_data_logNt[0:int(indexx[i]), i] = np.nan
+        result_data_logIWC_Z[0:int(indexx[i]), i] = np.nan
 
     # -----------------------------------------------------------------
     # result_data_... plotting
@@ -795,6 +1121,13 @@ def qvp_Boxpol():
            'title': '$\mathrm{\mathsf{\phi_{DP}}}$',
            'cb_label': 'Differential Phase (deg)'}
 
+    phi2 = {'name': 'phi2',
+           'data': result_data_phi2,
+           'levels': [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 25, 30, 35,
+                      40, 100],
+           'title': '$\mathrm{\mathsf{\phi_{DP}}}$',
+           'cb_label': 'Differential Phase (deg)'}
+
     rho = {'name': 'rho',
            'data': result_data_rho,
            'levels': [.7, .8, .85, .9, .92, .94, .95, .96, .97, .98, .985,
@@ -809,11 +1142,49 @@ def qvp_Boxpol():
            'title': '$\mathrm{\mathsf{K_{DP}}}$',
            'cb_label': 'Specific differential Phase (deg/km)'}
 
+    kdp2 = {'name': 'kdp2',
+           'data': result_data_kdp2,
+           'levels': [-1, -0.5, -0.1, 0, 0.05, 0.10, 0.20, 0.30, 0.40, 0.60, 0.80,
+                      1.0, 2., 3., 4.],
+           'title': '$\mathrm{\mathsf{K_{DP}}}$',
+           'cb_label': 'Specific differential Phase (deg/km)'}
+
+    dm = {'name': 'dm',
+          'data': result_data_dm,
+          'levels': [0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0],
+          'title': '$\mathrm{\mathsf{D_{m}}}$',
+          'cb_label': 'Mean volume diameter (mm)'}
+
+
+    logNt = {'name': 'logNt',
+             'data': result_data_logNt,
+             'levels': [-0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0.7, 1.0, 1.3, 1.6, 2.0, 2.5, 3.0, 3.5],
+             'title': '$\mathrm{\mathsf{lg(N_t)}}$',
+             'cb_label': 'Conc. of ice particles (1/L)'}
+
+    logIWC = {'name': 'logIWC',
+              'data': result_data_logIWC,
+              'levels': [-2.2, -2.0, -1.8, -1.6, -1.4, -1.2, -1.0, -0.8, -0.6, -0.4, -0.2, 0, 0.2, 0.4],
+              'title': '$\mathrm{\mathsf{lg(IWC)}}$',
+              'cb_label': 'Ice water content ($\mathrm{\mathsf{g/m**3}}$)'}
+
+    logIWC_Z = {'name': 'logIWC_Z',
+                'data': result_data_logIWC_Z,
+                'levels': [-2.2, -2.0, -1.8, -1.6, -1.4, -1.2, -1.0, -0.8, -0.6, -0.4, -0.2, 0, 0.2, 0.4],
+                'title': '$\mathrm{\mathsf{lg(IWC(Z))}}$',
+                'cb_label': 'Ice water content a la Hogan ($\mathrm{\mathsf{g/m**3}}$)'}
+
     moments = {'zh': zh,
                'zdr': zdr,
                'phi': phi,
                'rho': rho,
-               'kdp': kdp
+               'kdp': kdp,
+               'kdp2': kdp2,
+               'phi2': phi2,
+               'dm': dm,
+               'logNt': logNt,
+               'logIWC': logIWC,
+               'logIWC_Z': logIWC_Z
                }
 
     # x-y-grid for radar data

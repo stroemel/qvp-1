@@ -41,15 +41,17 @@ warnings.filterwarnings('ignore')
 """
 # this defines start and end time
 # need to be within the same day
-start_time = dt.datetime(2014, 1, 20, 23, 00)
-end_time = dt.datetime(2014, 1, 20, 23, 59)
+start_time = dt.datetime(2015, 8, 27, 13, 00)
+end_time = dt.datetime(2015, 8, 27, 23, 00)
 
 date = '{0}-{1:02d}-{2:02d}'.format(start_time.year, start_time.month, start_time.day)
 #location = 'Bonn'
-location = 'Berlin'
+location = 'Essen'
 #radar_path='/automount/radar/scans/{0}/{0}-{1:02}/{2}'.format(start_time.year, start_time.month, date)
-radar_path='/home/silke/data/BlitzeisBerlin/Revision'#.format(start_time.year, start_time.month, date)
-output_path = '../../output/Berlin'
+#radar_path='/home/silke/data/BlitzeisBerlin/Revision'#.format(start_time.year, start_time.month, date)
+#radar_path='/home/silke/data/Climatology/20150108_ess'
+radar_path='/home/silke/data/Climatology/20150827_ess'
+output_path = '/home/silke/Python/output/Essen'
 # choose scan
 file_path = radar_path + '/' #+ 'n_ppi_280deg/'
 textfile_path = output_path + '/{0}/textfiles/'.format(date)
@@ -72,8 +74,9 @@ plot_width = 9
 plot_height = 7.2
 
 offset_z = 0#3
-offset_phi = 0#90
-offset_zdr = 0#0.8
+#offset_phi am 20150827 ist -140
+offset_phi = -140#90
+offset_zdr = 0.0#0.8
 special_char = ":"
 
 """
@@ -430,7 +433,7 @@ def add_plot(mom, cfg):
     ax = mom['ax']
     levels = mom['levels']
     if cfg['contour']:
-        im = ax.contourf(mom['data'], levels=levels,
+        im = ax.contourf(cfg['X'], cfg['Y'],mom['data'], levels=levels,
                          colors=cfg['colors'], origin='lower', axis='equal',
                          extent=[cfg['dt_start'], cfg['dt_stop'],
                                  -0.11, cfg['beam_height'][-1]])
@@ -439,7 +442,7 @@ def add_plot(mom, cfg):
         norm = BoundaryNorm(levels, ncolors=cmap.N)#, clip=True)
         im = ax.pcolormesh(cfg['X'], cfg['Y'], mom['data'], cmap=cmap, norm=norm)
 
-    ax.set_ylim(0, 4)
+    ax.set_ylim(0, 8)
     ax.xaxis_date()
     ax.xaxis.set_major_formatter(mdates.DateFormatter('\n%H:%M'))
     ax.xaxis.set_major_locator(mdates.HourLocator())
@@ -521,7 +524,7 @@ def qvp_Boxpol():
     # aendern
 
     print(file_path)
-    filetempl = 'mvol*0002'
+    filetempl = 'mvol*0008'
     file_names = sorted(glob.glob(os.path.join(file_path, filetempl)))
 
     print(file_names[0])
@@ -529,6 +532,7 @@ def qvp_Boxpol():
     # get some specifics of the radar data
     ds0 = dwdpol(file_names[0])
     bin_range = ds0.range_samples * ds0.range_step
+    dr = bin_range / 1000.
     bin_count = ds0.bin_count
     range_bin_dist = np.arange(bin_range/2, bin_range*bin_count+1, bin_range)
     elevation = ds0.elevation
@@ -581,6 +585,7 @@ def qvp_Boxpol():
             print("ZH:", dsl.zh.shape)
             print("RES:", result_data_zh.shape)
             print("---------> Reading finished")
+            print("range_bin_dist", range_bin_dist)
 
             # add the offset
             dsl.zh += offset_z
@@ -590,8 +595,8 @@ def qvp_Boxpol():
             # noise reduction for rho_hv
             # vorher -23
             # vorher -21
-            noise_level = -23
-            # noise_level = -32
+            #noise_level = -26
+            noise_level = -27
 
             # aendern
             snr = np.zeros((azi, bins))
@@ -602,7 +607,7 @@ def qvp_Boxpol():
             for i in range(azi):
                 snr[i, :] = dsl.zh[i, :] - 20 * np.log10(range_bin_dist * 0.001) - noise_level - \
                             0.033 * range_bin_dist / 1000
-            #dsl.rho = dsl.rho * np.sqrt(1. + 1. / 10. ** (snr * 0.1))
+            dsl.rho = dsl.rho * np.sqrt(1. + 1. / 10. ** (snr * 0.1))
 
             result_data_zh[n, ...] = dsl.zh
             result_data_phi[n, ...] = dsl.phi
@@ -612,7 +617,7 @@ def qvp_Boxpol():
             dt_src.append(dsl.date)
 
         #testplot
-        wrl.vis.plot_cg_ppi(dsl.zdr)
+        wrl.vis.plot_cg_ppi(dsl.phi)
         plt.show()
 
         # save data to file
@@ -634,31 +639,28 @@ def qvp_Boxpol():
 
         # process phidp
         test = np.zeros_like(phi)
+        test = phi.copy()
         kdp = np.zeros_like(phi)
+        #evtl Löschung Anfang
         for i, v in enumerate(phi):
             print("Timestep:", i)
             for j, w in enumerate(v):
-                ma = movingaverage(w, 11, mode='same')
-
-                # window = [-1, 0, 0, 0, 1]
-                # slope = np.convolve(range(len(w)), window, mode='same') / np.convolve(w, window, mode='same')
-                # slope, intercept, r_value, p_value, std_err = stats.linregress(range(len(w)),w)
-                # slope = np.gradient(w)
-                # print(slope.shape)
-                # kdp[i, j, :] = slope
+                ma = movingaverage(w, 3, mode='same')
                 test[i, j, :] = ma
-                # test[i, j, result_data_zh[i, j, :] < -5.] = np.nan
-                test[i, j, result_data_zh[i, j, :] < -5.] = np.nan
-                # print(test[i, j, :])
-                first = np.argmax(test[i, j, :] >= 0.)
-                last = np.argmax(test[i, j, ::-1] >= 0)
-                # print("f:", first, test[i, j, first], test[i, j, first-1])
-                # print("l:", last, test[i, j, -last-1], test[i, j, -last])
-                if first:
-                    test[i, j, :first + 1] = test[i, j, first]
-                if last:
-                    test[i, j, -last:] = test[i, j, -last - 1]
+                test[i, j, result_data_rho[i, j, :] < 0.7] = np.nan
+                test[i, j, result_data_zh[i, j, :] < -10.] = np.nan
+        #         # print(test[i, j, :])
+        #         first = np.argmax(test[i, j, :] >= 0.)
+        #         last = np.argmax(test[i, j, ::-1] >= 0)
+        #         # print("f:", first, test[i, j, first], test[i, j, first-1])
+        #         # print("l:", last, test[i, j, -last-1], test[i, j, -last])
+        #         if first:
+        #             test[i, j, :first + 1] = test[i, j, first]
+        #         if last:
+        #             test[i, j, -last:] = test[i, j, -last - 1]
+        #evtl Löschung Ende
 
+        #test[result_data_zh < -10] = np.nan
         # get kdp from phidp
 
         # V1: kdp from convolution, maximum speed
@@ -718,8 +720,13 @@ def qvp_Boxpol():
     # result_data_phi_median = stats.nanmean(phi, axis=1).T
 
     print("SHAPE1:", result_data_phi.shape, result_data_zdr.shape)
-    plt.imshow(result_data_zdr)
+    plt.imshow(result_data_phi)
+    plt.colorbar()
     plt.show()
+
+    plt.plot(result_data_phi[:,60])
+    plt.show()
+
     # -----------------------------------------------------------------
     # calulate beam_height: array with 350 elements
     # Elevation angle is hardcoded here
@@ -830,7 +837,7 @@ def qvp_Boxpol():
     zdr = {'name': 'zdr',
            'data': result_data_zdr,
            'levels': [-2, -1, 0, .1, .2, .3, .4, .5, .6, .8, 1.0, 1.2, 1.5,
-                      2.0, 2.5],
+                      2.0, 2.5, 3.0],
            'title': '$\mathrm{\mathsf{Z_{DR}}}$',
            'cb_label': 'Differential Reflectivity (dB)'}
 
@@ -845,6 +852,7 @@ def qvp_Boxpol():
            'data': result_data_phi,
            'levels': [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 25, 30, 35,
                       40, 100],
+           #'levels': [0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200],
            'title': '$\mathrm{\mathsf{\phi_{DP}}}$',
            'cb_label': 'Differential Phase (deg)'}
 

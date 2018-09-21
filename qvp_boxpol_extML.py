@@ -23,9 +23,12 @@ import miub_eccodes as mecc
 
 
 from scipy import stats
+from scipy import ndimage
 import glob
 import os
 import wradlib as wrl
+import math
+import pandas as pd
 
 import psutil
 process = psutil.Process(os.getpid())
@@ -37,8 +40,12 @@ process = psutil.Process(os.getpid())
 """
 # this defines start and end time
 # need to be within the same day
-start_time = dt.datetime(2014, 8, 26, 12, 30)
-end_time = dt.datetime(2014, 8, 26, 18,40)
+
+start_time = dt.datetime(2014, 10, 7, 00, 00)
+end_time = dt.datetime(2014, 10, 7, 3,30)
+
+
+
 #cosmo_end_time = dt.datetime(2014, 8, 26, 21, 00)
 
 date = '{0}-{1:02d}-{2:02d}'.format(start_time.year, start_time.month, start_time.day)
@@ -72,8 +79,11 @@ plot_width = 9
 plot_height = 7.2
 
 offset_z = 3
-offset_phi = 92
-offset_zdr = 0.6
+
+offset_phi = 85
+
+offset_zdr = 0.5
+
 special_char = ":"
 
 """
@@ -363,6 +373,215 @@ def fig_ax(title, w, h):
     ax.set_title(title)
     return fig, ax
 
+
+def melting_layer_qvp(qvp_zh, qvp_zdr, qvp_rhohv, elevation, dr, nbins, height_limit=""):
+    """
+    A melting layer detection method based on QVP data of ZH, ZDR, and RHOHV. Returns the location of the
+    top and bottom of the melting layer.
+
+    Inputs are....
+    -QVP data of ZH, ZDR, and RHOhv (qvp_zh,qvp_zdr,qvp_rhohv).where x is height, and y is
+    -The elevation angle of the qvps (elevation).
+    -The range step (dr)
+    -The number of bins for range(bins)
+    -Height_limit is optional limit. It will cut the data to certain height. This can improve the functioning because sometimes the top of the clouds produce problems.
+
+    Created on Tuesday April 11 2017
+
+    bhickman@uni-bonn.de
+
+
+    """
+    re = 6374000.
+    ke = 4. / 3.
+    range_bin_dist = 100.
+    radar_height = 99.5
+    print(type(nbins))
+    r = np.linspace(0, (nbins - 1) * 100, nbins)
+    # beam_height=(np.sqrt( r**2 + (ke*re)**2 + 2*r*ke*re*np.sin(np.radians(elevation)) )- ke*re)/1000
+    beam_height = (wrl.georef.beam_height_n(r, round(elevation, 1))
+                   + radar_height) / 1000
+
+    ############################################################
+    # Step 1Normalize QVP data
+
+    # initiating empty arraysfor normalized data
+    z0 = np.zeros((qvp_zh.shape[0], qvp_zh.shape[1]))
+    rho0 = np.zeros((qvp_zh.shape[0], qvp_zh.shape[1]))
+    zdr0 = np.zeros((qvp_zh.shape[0], qvp_zh.shape[1]))
+
+    for ii in range(z0.shape[1]):
+        # normalize Z
+        z = np.copy(qvp_zh[:, ii])
+        zmask = np.where((z < -10) | (z > 60))
+        z[zmask] = np.nan
+        z0[:, ii] = (z - np.nanmin(z)) / (np.nanmax(z) - np.nanmin(z))
+
+        # normalize rho
+        rho = np.copy(qvp_rhohv[:, ii])
+        rhomask = np.where((rho < 0.65) | (rho > 1))  # rho thresholds
+        rho[rhomask] = np.nan
+        rho0[:, ii] = (rho - np.nanmin(rho)) / (np.nanmax(rho) - np.nanmin(rho))
+
+        # normalize ZDR
+        zd = np.copy(qvp_zdr[:, ii])
+        zdmask = np.where((zd < -1) | (zd > 4))
+        zd[zdmask] = np.nan
+        zdr0[:, ii] = (zd - np.nanmin(zd)) / (np.nanmax(zd) - np.nanmin(zd))
+
+    ############################################################
+    # removing profiles with too few data (>93% of array is nan)
+    per = np.zeros(z0.shape[1])
+    for ii in range(z0.shape[1]):
+        zt = z0[:, ii]
+        tnan = np.count_nonzero(np.isnan(zt))
+        tot = np.float(z0.shape[0])
+        per[ii] = tnan / tot * 100
+    for ii in range(z0.shape[1]):
+        if per[ii] >= 93.:
+            z0[:, ii] = np.nan
+            zdr0[:, ii] = np.nan
+            rho0[:, ii] = np.nan
+        else:
+            z0[:, ii] = z0[:, ii]
+            zdr0[:, ii] = zdr0[:, ii]
+            rho0[:, ii] = rho0[:, ii]
+
+            ############################################################
+    #### Step 2combining three normalized variables into single varible (IMcomb) ####
+    # IMcomb =(zdr0*(1-rho0)*z0)
+    ## A try for cases where identified bottom is above top of ML
+    IMcomb = (zdr0 * zdr0 * (1 - rho0) * z0)
+
+    ############################################################
+    #### STEP 3 SOBEL Filter ####
+    dy = ndimage.sobel(IMcomb, 0)
+
+    ############################################################
+    #### STEP 4 Threshold ####
+    ml_mask = np.where(np.abs(dy) < .02)
+    dy[ml_mask] = 0.
+
+    ############################################################
+    # Step 4b Height mask
+    if not height_limit:
+        height_limit = ""
+    else:
+        height_limit = np.asfarray(height_limit)
+        height_mask = np.where(beam_height > height_limit)
+        dy[height_mask] = np.nan
+
+    ############################################################
+    #### Step 5 ML Height min and max ####
+    mlh_ind = np.zeros(IMcomb.shape[1])
+    ml_top = np.zeros(dy.shape[1])
+    ml_bottom = np.zeros(dy.shape[1])
+    mlh_top = np.zeros(dy.shape[1])
+    mlh_bottom = np.zeros(dy.shape[1])
+    for ii in range(dy.shape[1]):
+        d = dy[:, ii]
+        # print np.nansum(d), ii
+        if np.nansum(d) == math.isnan(np.nansum(d)):
+            ml_bottom[ii] = -999
+        else:
+            ml_bottom[ii] = np.nanargmax(d)
+        if np.nansum(d) == math.isnan(np.nansum(d)):
+            ml_top[ii] = 999
+        else:
+            ml_top[ii] = np.nanargmin(d)
+
+    for ii in range(dy.shape[1]):
+        if ml_bottom[ii] == -999:
+            mlh_bottom[ii] = -999
+        else:
+            # print("ml_bottom[ii]",ml_bottom[ii])
+            mlh_bottom[ii] = beam_height[int(ml_bottom[ii])]
+
+    mlh_bottom[mlh_bottom == -999] = np.nan
+    for ii in range(dy.shape[1]):
+        if ml_top[ii] == 999:
+            mlh_top[ii] = 999
+        else:
+            mlh_top[ii] = beam_height[int(ml_top[ii])]
+    mlh_top[mlh_top == 999] = np.nan
+
+    # Remove MLH_top which are below the MLH_bottom
+    for ii in range(len(mlh_bottom)):
+        if mlh_top[ii] <= mlh_bottom[ii]:
+            mlh_top[ii] = np.nan
+
+    ############################################################
+    #### Step 6 Median ML ######
+    MED_mlh_bot = pd.rolling_median(mlh_bottom, min_periods=1, center=False, window=36)
+    MED_mlh_top = pd.rolling_median(mlh_top, min_periods=1, center=False, window=36)
+
+    if qvp_zh.ndim > 1:
+        bh = np.array([beam_height, ] * qvp_zh.shape[1]).transpose()
+    else:
+        bh = beam_height
+
+    ############################################################
+    # Step 7: Step 5 is run again, but this time after discarding the gradient image above ...
+    # (1 + fML,height) · MED_mlh_top and below (1 − fML,height ) · MED_mlh_bot , assuming the ML is a relatively
+    # flat structure. This helps to remove the possible contamination by ground echoes or small embedded cells
+    # of intense rainfall. The chosen value for fML,height is 0.3
+    mlh_ind = np.zeros(IMcomb.shape[1])
+
+    ml_top = np.zeros(IMcomb.shape[1])
+    ml_bottom = np.zeros(IMcomb.shape[1])
+
+    fMLH = 0.3
+    IMabove = (1 + fMLH) * MED_mlh_top
+    IMbelow = (1 - fMLH) * MED_mlh_bot
+
+    h_ind = np.where((bh > IMabove) | (bh < IMbelow))
+    ml_new = np.copy(dy)
+    ml_new[h_ind] = np.nan
+    mlh_top = np.zeros(ml_new.shape[1])
+    mlh_bottom = np.zeros(ml_new.shape[1])
+    for ii in range(dy.shape[1]):
+        d = ml_new[:, ii]
+        if np.nansum(d) == math.isnan(np.nansum(d)):
+            ml_bottom[ii] = -999
+        else:
+            ml_bottom[ii] = np.nanargmax(d)
+        if np.nansum(d) == math.isnan(np.nansum(d)):
+            ml_top[ii] = 999
+        else:
+            ml_top[ii] = np.nanargmin(d)
+
+    for ii in range(dy.shape[1]):
+        if ml_bottom[ii] == -999:
+            mlh_bottom[ii] = -999
+        else:
+            mlh_bottom[ii] = beam_height[int(ml_bottom[ii])]
+    mlh_bottom[mlh_bottom == -999] = np.nan
+
+    for ii in range(ml_new.shape[1]):
+        if ml_top[ii] == 999:
+            mlh_top[ii] = 999
+        else:
+            mlh_top[ii] = beam_height[int(ml_top[ii])]
+    mlh_top[mlh_top == 999] = np.nan
+
+    # Remove MLH_top which are below the MLH_bottom
+    for ii in range(len(mlh_bottom)):
+        if mlh_top[ii] <= mlh_bottom[ii]:
+            # A try for very low MLs
+            # mlh_top[ii]=np.nan
+            # mlh_bottom[ii]=np.nan
+            mlh_bottom[ii] = beam_height[int(1)]
+            ml_bottom[ii] = 1
+
+    # print 'MLH bottom', np.nanmedian(mlh_bottom), 'MLH top', np.nanmedian(mlh_top)
+    # print 'MLH bottom',np.nanmedian(mlh_bottom2),'MLH top', np.nanmedian(mlh_top2)
+
+    # MED_mlh_bot=pd.rolling_median(mlh_bottom,min_periods=1,center=False,window=12)
+    # MED_mlh_top=pd.rolling_median(mlh_top,min_periods=1,center=False,window=12)
+
+
+    return mlh_top, mlh_bottom, ml_top, ml_bottom, beam_height
+
 def add_contour(ax, X, Y, data, levels, **kwargs):
     cs = ax.contour(X, Y, data, levels, **kwargs)
     ax.clabel(cs, fmt='%2.0f', inline=True, fontsize=10)
@@ -468,6 +687,7 @@ def qvp_Boxpol():
 
     print(file_path)
     file_names = sorted(glob.glob(os.path.join(file_path, '*mvol')))
+
 
     print(file_names[0])
 
@@ -607,7 +827,8 @@ def qvp_Boxpol():
         # get kdp from phidp
 
         # V1: kdp from convolution, maximum speed
-        kdp = wrl.dp.kdp_from_phidp_convolution(test, L=11, dr=0.1)
+        #vorher mit L=11
+        kdp = wrl.dp.kdp_from_phidp_convolution(test, L=21, dr=0.1)
 
         # V2: fit ala ryzhkov, see function declared above
         #kdp = kdp_calc(test, wl=11)
@@ -647,6 +868,7 @@ def qvp_Boxpol():
 
     result_data_kdp = np.nanmedian(kdp, axis=1).T
 
+
     # mask phidp eventually,
     for i in range(360):
         k2 = test[:, i, :]
@@ -669,6 +891,36 @@ def qvp_Boxpol():
 
     beam_height = (wrl.georef.beam_height_n(range_bin_dist, round(elevation,1))
                    + radar_height) / 1000
+
+    # Calculate new kdp, based on modified phidp which does not include delta in the ML
+    ############################################################
+    #modified phidp
+    print("SHAPES:", result_data_phi.shape, result_data_kdp.shape, result_data_zh.shape)
+    phi2 = result_data_phi.copy()
+    elevation = 18.0
+    dr = 100.0
+    nbins = result_data_zh.shape[0]  # andersrum? erst times dann bins?
+    times = result_data_zh.shape[1]
+    toph, bottomh, topi, bottomi, bh = melting_layer_qvp(result_data_zh, result_data_zdr, result_data_rho,
+                                                         elevation, dr, nbins, height_limit=10.)
+    #diffml=np.zeros(times)
+    #print("ML", topi, bottomi, phi2.shape)
+    for i in range(times):
+        #print("ML", int(topi[i] + 10), int(topi[i] + 20))
+        #print("TIMES:", i, phi2[int(topi[i] + 10):int(topi[i] + 20), i])
+        index = int(topi[i] + 10) + np.argmin(phi2[int(topi[i] + 10):int(topi[i] + 20), i])
+        indexu = int(bottomi[i] - 10)
+        diffml = phi2[index, i] - phi2[indexu, i]
+        steps=index-indexu
+        for l in range(steps):
+            phi2[indexu+l, i]= phi2[indexu, i] + l*(diffml/steps)
+    #modified kdp
+    result_data_phi2 = phi2.copy()
+    #vorher mit L=11
+    result_data_kdp2 = wrl.dp.kdp_from_phidp_convolution(result_data_phi2.T, L=21, dr=0.1).T
+    ############################################################
+
+
 
     #COSMO prozessing fuer out_2013-03-01-00 bis out_2014-07-07-00
     cosmo_path = '/automount/cluma04/CNRW/CNRW_4.23/cosmooutput/' \
@@ -795,6 +1047,13 @@ def qvp_Boxpol():
            'title': '$\mathrm{\mathsf{\phi_{DP}}}$',
            'cb_label': 'Differential Phase (deg)'}
 
+    phi2 = {'name': 'phi2',
+           'data': result_data_phi2,
+           'levels': [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 25, 30, 35,
+                      40, 100],
+           'title': '$\mathrm{\mathsf{\phi_{DP}}}$',
+           'cb_label': 'Differential Phase (deg)'}
+
     rho = {'name': 'rho',
            'data': result_data_rho,
            'levels': [.7, .8, .85, .9, .92, .94, .95, .96, .97, .98, .985,
@@ -809,11 +1068,20 @@ def qvp_Boxpol():
            'title': '$\mathrm{\mathsf{K_{DP}}}$',
            'cb_label': 'Specific differential Phase (deg/km)'}
 
+    kdp2 = {'name': 'kdp2',
+           'data': result_data_kdp2,
+           'levels': [-1, -0.5, -0.1, 0, 0.05, 0.10, 0.20, 0.30, 0.40, 0.60, 0.80,
+                      1.0, 2., 3., 4.],
+           'title': '$\mathrm{\mathsf{K_{DP}}}$',
+           'cb_label': 'Specific differential Phase (deg/km)'}
+
     moments = {'zh': zh,
                'zdr': zdr,
                'phi': phi,
                'rho': rho,
-               'kdp': kdp
+               'kdp': kdp,
+               'kdp2': kdp2,
+               'phi2': phi2
                }
 
     # x-y-grid for radar data

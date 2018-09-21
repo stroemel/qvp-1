@@ -14,7 +14,7 @@
 
 import numpy as np
 import eccodes as ecc
-#from collections import OrderedDict
+from collections import OrderedDict
 #from dictdiffer import diff
 
 def get_ecc_value_from_file(filename, keyname, keyvalue):
@@ -32,10 +32,13 @@ def get_ecc_value_from_file(filename, keyname, keyvalue):
 def get_ecc_value(gids, keyname, keyvalue):
     
     first = True
-    
+    data = None
+    #print(gids)
     for i, gid in enumerate(gids):
-        if ecc.codes_get(gid, keyname) == keyvalue:
-            if first:            
+        kval = ecc.codes_get(gid, keyname)
+        #print(keyname, kval, keyvalue)
+        if kval == keyvalue:
+            if first:
                 Ni = ecc.codes_get(gid, 'Ni')
                 Nj = ecc.codes_get(gid, 'Nj')
                 data = np.array(ecc.codes_get_values(gid))
